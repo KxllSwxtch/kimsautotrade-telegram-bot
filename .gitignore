@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.pkl
+*.log
+
+# Virtual Environment
+venv/
+env/
+
+# Heroku
+*.env
+Procfile
+*.heroku/
+.heroku/
+
+# Byte-compiled files
+*.pyc
+*.pyo
+
+# Caches
+*.cache
+*.mypy_cache/
+*.pytest_cache/
+.pip_cache/
+
+# Logs
+*.log
+*.out
+*.err
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Environment variables
+.env
+
+# Python build files
+build/
+dist/
+*.egg-info/
+
+# Node.js (если используется для фронтенда)
+node_modules/
+npm-debug.log
+
+# PyCharm & VSCode
+*.iml
+.idea/
+.vscode/
+.vs/
+
+# Coverage reports
+.coverage
+htmlcov/
