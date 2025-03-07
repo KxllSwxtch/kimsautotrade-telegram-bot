@@ -34,11 +34,6 @@ load_dotenv()
 CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH_LOCAL")
 DATABASE_URL = "postgres://uea5qru3fhjlj:p44343a46d4f1882a5ba2413935c9b9f0c284e6e759a34cf9569444d16832d4fe@c97r84s7psuajm.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com:5432/d9pr93olpfl9bj"
 
-proxy = {
-    "http": "http://B01vby:GBno0x@45.118.250.2:8000",
-    "https": "http://B01vby:GBno0x@45.118.250.2:8000",
-    "no-proxy": "localhost,127.0.0.1",
-}
 
 # Переменные
 car_data = {}
@@ -59,7 +54,7 @@ usd_rate_krw = 0
 last_error_message_id = {}
 
 # Для России
-usd_rate = 0
+usd_rub_rate = 0
 krw_rub_rate = 0
 eur_rub_rate = 0
 
@@ -233,36 +228,35 @@ def get_nbk_currency_rates():
 
 # Курс валют для России
 def get_currency_rates():
-    global krw_rub_rate, eur_rub_rate
-
-    clear_memory()
+    global krw_rub_rate, eur_rub_rate, usd_rub_rate
 
     print_message("[КУРС] РОССИЯ")
-
-    global usd_rate
 
     url = "https://www.cbr-xml-daily.ru/daily_json.js"
     response = requests.get(url)
     data = response.json()
+
+    print(data)
 
     # Дата курса
     rates_date = datetime.datetime.now().strftime("%d.%m.%Y")
 
     # Получаем курсы валют
     eur_rate = data["Valute"]["EUR"]["Value"]
-    usd_rate = data["Valute"]["USD"]["Value"]
+    usd_rate_local = data["Valute"]["USD"]["Value"]
     krw_rate = data["Valute"]["KRW"]["Value"] / data["Valute"]["KRW"]["Nominal"]
     cny_rate = data["Valute"]["CNY"]["Value"]
 
     # Сохраняем в глобальные переменные для будущих расчётов
     krw_rub_rate = krw_rate
     eur_rub_rate = eur_rate
+    usd_rub_rate = usd_rate_local
 
     # Форматируем текст
     rates_text = (
         f"Курс валют ЦБ ({rates_date}):\n\n"
         f"EUR {eur_rate:.2f} ₽\n"
-        f"USD {usd_rate:.2f} ₽\n"
+        f"USD {usd_rub_rate:.2f} ₽\n"
         f"KRW {krw_rate:.2f} ₽\n"
         f"CNY {cny_rate:.2f} ₽"
     )
@@ -362,7 +356,7 @@ def get_car_info(url):
 
 
 def calculate_cost(country, message):
-    global car_data, car_id_external, util_fee, current_country, krw_rub_rate, eur_rub_rate, usd_rate_kz, usd_rate_krg, krw_rate_krg
+    global car_data, car_id_external, util_fee, current_country, krw_rub_rate, eur_rub_rate, usd_rate_kz, usd_rate_krg, krw_rate_krg, usd_rate_krw, usd_rub_rate
 
     print_message("ЗАПРОС НА РАСЧЁТ АВТОМОБИЛЯ")
 
@@ -450,6 +444,7 @@ def calculate_cost(country, message):
             engine_volume_formatted = f"{format_number(car_engine_displacement)} cc"
 
             # Конвертируем стоимость авто в рубли
+            usd_rate_krw = get_usd_to_krw_rate()
             price_krw = int(car_price) * 10000
             car_price_rub = price_krw * krw_rub_rate
 
@@ -472,16 +467,27 @@ def calculate_cost(country, message):
             )
 
             # Расчет итоговой стоимости автомобиля
-            total_cost = (
-                (1000 * usd_rate)
-                + (250 * usd_rate)
-                + 120000
-                + customs_duty
-                + recycling_fee
-                + customs_fee
-                + 440000 * krw_rub_rate
-                + car_price_rub
-            )
+            # Расходы по Корее
+            # 1. Стоимость автомобиля + 2040000 если авто до 2л , иначе + 200$
+            # 2. Далее эту сумму конвертируем в USDT по курсу 
+            # 3. Далее USDT конвертируем в рубли
+
+            # Расходы по России
+            # 1. Растаможка + брокер 120,000 рублей
+            # 2. Автовоз 250,000 рублей
+            # Итоговая сумма всех расходов в рублях
+
+            excise = 2040000 if int(car_engine_displacement) < 2000 else 2040000 + (200 * usd_rate_krw)
+            total_korea_costs = price_krw + excise
+            total_korea_costs_usdt = total_korea_costs / usd_rate_krw
+            total_korea_costs_rub = total_korea_costs_usdt * usd_rub_rate
+
+            total_russia_costs = customs_duty + recycling_fee + customs_fee + 120000 + 250000
+
+
+            print(excise, usd_rate_krw, usd_rub_rate)
+
+            total_cost = total_korea_costs_rub + total_russia_costs
 
             car_data["price_rub"] = car_price_rub
             car_data["duty"] = customs_fee
@@ -495,9 +501,13 @@ def calculate_cost(country, message):
             # Формирование сообщения результата
             result_message = (
                 f"Возраст: {age_formatted}\n"
-                f"Стоимость автомобиля в Корее: {format_number(price_krw)} ₩\n"
                 f"Объём двигателя: {engine_volume_formatted}\n\n"
-                f"Примерная стоимость автомобиля под ключ до Владивостока: \n<b>{format_number(total_cost)} ₽</b>\n\n"
+                # f"Примерная стоимость автомобиля под ключ до Владивостока: \n<b>{format_number(total_cost)} ₽</b>\n\n"
+                f"<b>Расходы по Корее</b>:\n"
+                f"Стоимость автомобиля + акциза:\n{format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} | {format_number(total_korea_costs_rub)} ₽\n\n"
+                f"Расходы по России:\n"
+                f"Таможенные платежи (ЕТС, пошлина, утильсбор) + Услуги Брокера + Автовоз:\n{format_number(total_russia_costs)} ₽\n\n"
+                f"<b>Итого стоимость автомобиля под ключ</b>: {format_number(total_cost)} ₽\n\n"
                 f"🔗 <a href='{preview_link}'>Ссылка на автомобиль</a>\n\n"
                 "Если данное авто попадает под санкции, пожалуйста уточните возможность отправки в вашу страну у наших менеджеров:\nАртём - @swallows_from_korea\nРамис - +82 10-8029-6232\n\n"
                 "🔗 <a href='https://t.me/avtokoreaRF'>Официальный телеграм канал</a>\n"
@@ -505,11 +515,11 @@ def calculate_cost(country, message):
 
             # Клавиатура с дальнейшими действиями
             keyboard = types.InlineKeyboardMarkup()
-            keyboard.add(
-                types.InlineKeyboardButton(
-                    "📊 Детализация расчёта", callback_data="detail"
-                )
-            )
+            # keyboard.add(
+            #     types.InlineKeyboardButton(
+            #         "📊 Детализация расчёта", callback_data="detail"
+            #     )
+            # )
             keyboard.add(
                 types.InlineKeyboardButton(
                     "📝 Технический отчёт об автомобиле",
@@ -1017,8 +1027,8 @@ def calculate_cost_manual(country, year, month, engine_volume, price, car_type):
         recycling_fee = clean_number(response["util"])
 
         total_cost = (
-            (1000 * usd_rate)
-            + (250 * usd_rate)
+            (1000 * usd_rub_rate)
+            + (250 * usd_rub_rate)
             + 120000
             + customs_duty
             + recycling_fee
