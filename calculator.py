@@ -14,11 +14,11 @@ from seleniumwire import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from urllib.parse import urlparse, parse_qs
+from bs4 import BeautifulSoup
 
 # utils.py import
 from config import bot
 from utils import (
-    calculate_excise_by_volume,
     clear_memory,
     format_number,
     print_message,
@@ -58,8 +58,82 @@ usd_rub_rate = 0
 krw_rub_rate = 0
 eur_rub_rate = 0
 
+usdt_krw_rate = 0
+usdt_rub_rate = 0
+
 current_country = ""
 car_fuel_type = ""
+
+
+def get_usdt_to_rub_rate():
+    url = "https://www.bestchange.ru/action.php?lang=ru"
+
+    # Формируем данные для POST-запроса
+    form_data = {
+        "action": "getrates",
+        "page": "rates",
+        "from": "91",
+        "to": "10",
+        "city": "1",
+        "type": "",
+        "give": "",
+        "get": "",
+        "commission": "0",
+        "light": "0",
+        "sort": "from",
+        "range": "asc",
+        "sortm": "0",
+        "tsid": "0",
+    }
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0",
+    }
+
+    # Отправляем POST-запрос
+    response = requests.post(url, data=form_data, headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"Ошибка запроса: статус {response.status_code}")
+
+    # Парсим HTML-ответ с помощью BeautifulSoup
+    soup = BeautifulSoup(response.text, "html.parser")
+    parsed_data = []
+
+    # Ищем все строки таблицы внутри <tbody>
+    tbody = soup.find("tbody")
+    if tbody:
+        rows = tbody.find_all("tr")
+        for row in rows:
+            td_bi = row.find("td", class_="bi")
+            if td_bi:
+                bi_text = td_bi.get_text(strip=True)
+                # Ищем внутри td с классом "bi" элемент <div class="fs">
+                div_fs = td_bi.find("div", class_="fs")
+                fs_text = div_fs.get_text(strip=True) if div_fs else ""
+
+                if fs_text:
+                    match = re.search(r"(\d+(?:\.\d+)?)", fs_text)
+                    if match:
+                        numeric_value = match.group(1)
+                        parsed_data.append(float(numeric_value))
+
+    mean_value = sum(parsed_data) / len(parsed_data)
+    return mean_value
+
+
+def get_usdt_to_krw_rate():
+    # URL для получения курса USDT к KRW
+    url = "https://api.coinbase.com/v2/exchange-rates?currency=USDT"
+    response = requests.get(url)
+    data = response.json()
+
+    # Извлечение курса KRW
+    krw_rate = data["data"]["rates"]["KRW"]
+
+    print(f"Курс USDT к KRW -> {str(float(krw_rate) + 4)}")
+
+    return float(krw_rate) + 4
 
 
 def get_usd_to_krw_rate():
@@ -233,35 +307,46 @@ def get_currency_rates():
     print_message("[КУРС] РОССИЯ")
 
     url = "https://www.cbr-xml-daily.ru/daily_json.js"
-    response = requests.get(url)
-    data = response.json()
 
-    print(data)
+    try:
+        response = requests.get(url, timeout=5)  # Добавил timeout
+        response.raise_for_status()  # Если статус код не 200, выбросит ошибку
 
-    # Дата курса
-    rates_date = datetime.datetime.now().strftime("%d.%m.%Y")
+        data = response.json()
 
-    # Получаем курсы валют
-    eur_rate = data["Valute"]["EUR"]["Value"]
-    usd_rate_local = data["Valute"]["USD"]["Value"]
-    krw_rate = data["Valute"]["KRW"]["Value"] / data["Valute"]["KRW"]["Nominal"]
-    cny_rate = data["Valute"]["CNY"]["Value"]
+        # Дата курса
+        rates_date = datetime.datetime.now().strftime("%d.%m.%Y")
 
-    # Сохраняем в глобальные переменные для будущих расчётов
-    krw_rub_rate = krw_rate
-    eur_rub_rate = eur_rate
-    usd_rub_rate = usd_rate_local
+        # Проверяем, есть ли нужные ключи в JSON
+        if "Valute" not in data or "USD" not in data["Valute"]:
+            print("Ошибка: Данные о валюте отсутствуют!")
+            return "Ошибка: Не удалось получить курс валют."
 
-    # Форматируем текст
-    rates_text = (
-        f"Курс валют ЦБ ({rates_date}):\n\n"
-        f"EUR {eur_rate:.2f} ₽\n"
-        f"USD {usd_rub_rate:.2f} ₽\n"
-        f"KRW {krw_rate:.2f} ₽\n"
-        f"CNY {cny_rate:.2f} ₽"
-    )
+        # Получаем курсы валют
+        eur_rate = data["Valute"]["EUR"]["Value"]
+        usd_rate_local = data["Valute"]["USD"]["Value"]
+        krw_rate = data["Valute"]["KRW"]["Value"] / data["Valute"]["KRW"]["Nominal"]
+        cny_rate = data["Valute"]["CNY"]["Value"]
 
-    return rates_text
+        # Сохраняем в глобальные переменные для будущих расчётов
+        krw_rub_rate = krw_rate
+        eur_rub_rate = eur_rate
+        usd_rub_rate = usd_rate_local + 6
+
+        # Форматируем текст
+        rates_text = (
+            f"Курс валют ЦБ ({rates_date}):\n\n"
+            f"EUR {eur_rate:.2f} ₽\n"
+            f"USD {usd_rate_local:.2f} ₽\n"
+            f"KRW {krw_rate:.2f} ₽\n"
+            f"CNY {cny_rate:.2f} ₽"
+        )
+
+        return rates_text
+
+    except requests.exceptions.RequestException as e:
+        print(f"Ошибка запроса: {e}")
+        return "Ошибка: Не удалось подключиться к серверу."
 
 
 def send_error_message(message, error_text):
@@ -289,6 +374,7 @@ def send_error_message(message, error_text):
         logging.error(
             f"Непредвиденная ошибка при отправке сообщения пользователю {message.chat.id}: {e}"
         )
+
 
 def get_car_info(url):
     global car_id_external, vehicle_no, vehicle_id
@@ -356,7 +442,7 @@ def get_car_info(url):
 
 
 def calculate_cost(country, message):
-    global car_data, car_id_external, util_fee, current_country, krw_rub_rate, eur_rub_rate, usd_rate_kz, usd_rate_krg, krw_rate_krg, usd_rate_krw, usd_rub_rate
+    global car_data, car_id_external, util_fee, current_country, krw_rub_rate, eur_rub_rate, usd_rate_kz, usd_rate_krg, krw_rate_krg, usd_rate_krw, usd_rub_rate, usdt_rub_rate
 
     print_message("ЗАПРОС НА РАСЧЁТ АВТОМОБИЛЯ")
 
@@ -444,6 +530,11 @@ def calculate_cost(country, message):
             engine_volume_formatted = f"{format_number(car_engine_displacement)} cc"
 
             # Конвертируем стоимость авто в рубли
+            usdt_krw_rate = float(get_usdt_to_krw_rate()) + 4
+            usdt_rub_rate = get_usdt_to_rub_rate()
+
+            print(usdt_rub_rate)
+
             usd_rate_krw = get_usd_to_krw_rate()
             price_krw = int(car_price) * 10000
             car_price_rub = price_krw * krw_rub_rate
@@ -461,40 +552,38 @@ def calculate_cost(country, message):
             # Рассчитываем утилизационный сбор
             recycling_fee = clean_number(response["util"])
 
-            # customs_duty = calculate_customs_duty(car_engine_displacement, eur_rub_rate)
-            excise_fee = calculate_excise_by_volume(
-                engine_volume=int(car_engine_displacement)
+            excise = (
+                2040000
+                if int(car_engine_displacement) < 2000
+                else 2040000 + (200 * usd_rate_krw)
             )
 
-            # Расчет итоговой стоимости автомобиля
-            # Расходы по Корее
-            # 1. Стоимость автомобиля + 2040000 если авто до 2л , иначе + 200$
-            # 2. Далее эту сумму конвертируем в USDT по курсу 
-            # 3. Далее USDT конвертируем в рубли
-
-            # Расходы по России
-            # 1. Растаможка + брокер 120,000 рублей
-            # 2. Автовоз 250,000 рублей
-            # Итоговая сумма всех расходов в рублях
-
-            excise = 2040000 if int(car_engine_displacement) < 2000 else 2040000 + (200 * usd_rate_krw)
             total_korea_costs = price_krw + excise
-            total_korea_costs_usdt = total_korea_costs / usd_rate_krw
-            total_korea_costs_rub = total_korea_costs_usdt * usd_rub_rate
 
-            total_russia_costs = customs_duty + recycling_fee + customs_fee + 120000 + 250000
+            total_korea_costs_usdt = total_korea_costs / usdt_krw_rate
 
+            total_korea_costs_usd = total_korea_costs / usd_rate_krw
+            total_korea_costs_rub = total_korea_costs_usd * usd_rub_rate
 
-            print(excise, usd_rate_krw, usd_rub_rate)
+            total_russia_costs = (
+                customs_duty + recycling_fee + customs_fee + 120000 + 250000
+            )
+            total_russia_costs_usdt = (
+                customs_duty + recycling_fee + customs_fee + 120000 + 250000
+            ) / usdt_rub_rate
 
             total_cost = total_korea_costs_rub + total_russia_costs
+
+            total_cost_usdt = total_korea_costs_usdt + total_russia_costs_usdt
+            total_cost_usdt_rub = (
+                total_korea_costs_usdt + total_russia_costs_usdt
+            ) * usdt_rub_rate
 
             car_data["price_rub"] = car_price_rub
             car_data["duty"] = customs_fee
             car_data["recycling_fee"] = recycling_fee
             car_data["total_price"] = total_cost
             car_data["customs_duty_fee"] = customs_duty
-            car_data["excise"] = excise_fee
 
             preview_link = f"https://fem.encar.com/cars/detail/{car_id}"
 
@@ -504,10 +593,12 @@ def calculate_cost(country, message):
                 f"Объём двигателя: {engine_volume_formatted}\n\n"
                 # f"Примерная стоимость автомобиля под ключ до Владивостока: \n<b>{format_number(total_cost)} ₽</b>\n\n"
                 f"<b>Расходы по Корее</b>:\n"
-                f"Стоимость автомобиля + акциза:\n{format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} | {format_number(total_korea_costs_rub)} ₽\n\n"
+                f"Стоимость автомобиля + акциза (инвойс):\n{format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usd)} | {format_number(total_korea_costs_rub)} ₽\n\n"
+                f"Стоимость автомобиля + акциза (USDT):\n${format_number(total_korea_costs_usdt)}\n\n"
                 f"Расходы по России:\n"
                 f"Таможенные платежи (ЕТС, пошлина, утильсбор) + Услуги Брокера + Автовоз:\n{format_number(total_russia_costs)} ₽\n\n"
-                f"<b>Итого стоимость автомобиля под ключ</b>: {format_number(total_cost)} ₽\n\n"
+                f"<b>Итого стоимость автомобиля под ключ (инвойс)</b>:\n{format_number(total_cost)} ₽\n\n"
+                f"<b>Итого стоимость автомобиля под ключ (USDT)</b>:\n${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"
                 f"🔗 <a href='{preview_link}'>Ссылка на автомобиль</a>\n\n"
                 "Если данное авто попадает под санкции, пожалуйста уточните возможность отправки в вашу страну у наших менеджеров:\nАртём - @swallows_from_korea\nРамис - +82 10-8029-6232\n\n"
                 "🔗 <a href='https://t.me/avtokoreaRF'>Официальный телеграм канал</a>\n"
@@ -528,7 +619,8 @@ def calculate_cost(country, message):
             )
             keyboard.add(
                 types.InlineKeyboardButton(
-                    "✉️ Связаться с менеджером Артёмом", url="https://t.me/swallows_from_korea"
+                    "✉️ Связаться с менеджером Артёмом",
+                    url="https://t.me/swallows_from_korea",
                 )
             )
             keyboard.add(
@@ -559,7 +651,7 @@ def calculate_cost(country, message):
             year, month = 0, 0
             if len(car_date) > 6:
                 year = int(f"20{re.sub(r'\D', '', car_date.split(' ')[0])}")
-                month = int(re.sub(r'\D', '', car_date.split(' ')[1]))
+                month = int(re.sub(r"\D", "", car_date.split(" ")[1]))
             else:
                 year = int(f"20{car_date[-2:]}")
                 month = int(car_date[2:4])
@@ -584,7 +676,11 @@ def calculate_cost(country, message):
 
             # Таможенные платежи
             customs_fee_kzt = car_price_kzt * 0.15
-            excise_fee_kzt = int(car_engine_displacement) * 100 if int(car_engine_displacement) >= 3000 else 0
+            excise_fee_kzt = (
+                int(car_engine_displacement) * 100
+                if int(car_engine_displacement) >= 3000
+                else 0
+            )
             vat_kzt = (car_price_kzt + 20000 + excise_fee_kzt) * 0.12
 
             # Утильсбор (KZT)
@@ -606,7 +702,9 @@ def calculate_cost(country, message):
 
             # Общие расходы
             total_customs_kzt = customs_fee_kzt + vat_kzt + excise_fee_kzt
-            total_expenses_kzt = total_customs_kzt + utilization_fee_kzt + registration_fee_kzt
+            total_expenses_kzt = (
+                total_customs_kzt + utilization_fee_kzt + registration_fee_kzt
+            )
 
             # Итоговая стоимость авто в тенге (KZT)
             final_cost_kzt = car_price_kzt + total_expenses_kzt + total_korea_kzt
@@ -667,7 +765,8 @@ def calculate_cost(country, message):
             )
             keyboard.add(
                 types.InlineKeyboardButton(
-                    "✉️ Связаться с менеджером Артёмом", url="https://t.me/swallows_from_korea"
+                    "✉️ Связаться с менеджером Артёмом",
+                    url="https://t.me/swallows_from_korea",
                 )
             )
             keyboard.add(
@@ -785,7 +884,8 @@ def calculate_cost(country, message):
             )
             keyboard.add(
                 types.InlineKeyboardButton(
-                    "✉️ Связаться с менеджером Артёмом", url="https://t.me/swallows_from_korea"
+                    "✉️ Связаться с менеджером Артёмом",
+                    url="https://t.me/swallows_from_korea",
                 )
             )
             keyboard.add(
