@@ -324,7 +324,7 @@ def get_currency_rates():
 
         # Получаем курсы валют
         eur_rate = data["Valute"]["EUR"]["Value"]
-        usd_rate_local = data["Valute"]["USD"]["Value"]
+        usd_rate_local = data["Valute"]["USD"]["Value"] + 6
         krw_rate = data["Valute"]["KRW"]["Value"] / data["Valute"]["KRW"]["Nominal"]
         cny_rate = data["Valute"]["CNY"]["Value"]
 
