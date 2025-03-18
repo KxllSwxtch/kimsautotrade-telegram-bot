@@ -1,3 +1,4 @@
+import time
 import telebot
 import psycopg2
 import os
@@ -906,6 +907,7 @@ def calculate_cost(country, message):
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
+            time.sleep(3)
 
         else:
             send_error_message(
