@@ -4,6 +4,12 @@ import datetime
 import locale
 from kgs_customs_table import KGS_CUSTOMS_TABLE
 
+HTTP_PROXY = 'http://B01vby:GBno0x@45.118.250.2:8000'
+proxies = {
+    'http': HTTP_PROXY,
+    'https': HTTP_PROXY
+}
+
 
 # Очищение памяти
 def clear_memory():
@@ -47,7 +53,7 @@ def get_customs_fees_russia(
     }
 
     try:
-        response = requests.post(url, data=payload, headers=headers)
+        response = requests.post(url, data=payload, headers=headers, proxies=proxies)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
