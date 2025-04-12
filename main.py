@@ -184,6 +184,8 @@ def process_encar_link(message):
             message.chat.id,
             "Пожалуйста, выберите страну из меню перед отправкой ссылки на автомобиль.",
         )
+        # Сразу показываем меню выбора страны
+        show_country_selection(message.chat.id)
         return
 
     # Проверяем, что ссылка содержит encar.com или fem.encar.com
