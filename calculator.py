@@ -458,8 +458,23 @@ def calculate_cost(country, message):
     )
     link = message.text
 
+    # Проверяем, является ли ссылка ссылкой на kimsautotrade.com
+    if "kimsautotrade.com/export-catalog/" in link:
+        # Извлекаем ID автомобиля из ссылки на kimsautotrade
+        car_id_match = re.findall(r"export-catalog/(\d+)", link)
+        if car_id_match:
+            car_id = car_id_match[0]
+            car_id_external = car_id
+            # Преобразуем ссылку в формат encar.com
+            link = f"https://fem.encar.com/cars/detail/{car_id}"
+        else:
+            send_error_message(
+                message,
+                "🚫 Не удалось извлечь ID автомобиля из ссылки на kimsautotrade.com",
+            )
+            return
     # Проверка ссылки на мобильную версию
-    if "fem.encar.com" in link:
+    elif "fem.encar.com" in link:
         car_id_match = re.findall(r"\d+", link)
         if car_id_match:
             car_id = car_id_match[0]  # Use the first match of digits
