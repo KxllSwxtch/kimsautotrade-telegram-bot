@@ -561,11 +561,7 @@ def calculate_cost(country, message):
             # Рассчитываем утилизационный сбор
             recycling_fee = clean_number(response["util"])
 
-            excise = (
-                2040000
-                if int(car_engine_displacement) < 2000
-                else 2040000 + (200 * usd_rate_krw)
-            )
+            excise = 2040000
 
             total_korea_costs = price_krw + excise
 
