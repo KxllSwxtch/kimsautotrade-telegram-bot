@@ -343,21 +343,14 @@ def handle_instagram(message):
 @bot.message_handler(func=lambda message: message.text == "WhatsApp")
 def handle_whatsapp(message):
     ramis_whatsapp = "+82 10-8029-6232"
-    artyom_whatsapp = "+82 10-8282-8062"
 
     # Формирование ссылки для WhatsApp:
     # Убираем символ "+", пробелы и тире, чтобы получить корректный формат номера для ссылки.
     ramis_link = "https://wa.me/" + ramis_whatsapp.replace("+", "").replace(
         " ", ""
     ).replace("-", "")
-    artyom_link = "https://wa.me/" + artyom_whatsapp.replace("+", "").replace(
-        " ", ""
-    ).replace("-", "")
 
-    result_message = (
-        f"Артём: {artyom_whatsapp} {artyom_link}\n"
-        f"Рамис: {ramis_whatsapp} {ramis_link}"
-    )
+    result_message = f"Рамис: {ramis_whatsapp} {ramis_link}"
 
     bot.send_message(message.chat.id, result_message)
 
@@ -372,9 +365,7 @@ def handle_telegram_channel(message):
 
 @bot.message_handler(func=lambda message: message.text == "Контакты")
 def handle_manager(message):
-    output_message = (
-        f"+82 10-8282-8062 - Артём (Корея)\n+82 10-8029-6232 - Рамис (Корея)"
-    )
+    output_message = f"+82 10-8029-6232 - Рамис (Корея)"
 
     bot.send_message(message.chat.id, output_message)
 
