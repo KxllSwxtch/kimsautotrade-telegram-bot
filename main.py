@@ -336,7 +336,7 @@ def handle_kyrgyzstan(message):
 def handle_instagram(message):
     bot.send_message(
         message.chat.id,
-        "Наш Instagram: https://www.instagram.com/auto_korea_cheongju",
+        "Наш Instagram: https://www.instagram.com/kims_auto_trade_official",
     )
 
 
