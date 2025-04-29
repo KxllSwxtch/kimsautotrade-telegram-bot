@@ -108,8 +108,8 @@ def get_usdt_to_rub_rate():
                 # Форматируем до двух знаков после запятой
                 formatted_rate = float(round(rate, 2))
 
-                # Добавляем 5% к курсу
-                rate_with_five_percent = formatted_rate + formatted_rate * 0.05
+                # Добавляем 3.5% к курсу
+                rate_with_five_percent = formatted_rate + formatted_rate * 0.035
 
                 print(f"Курс USDT к RUB -> {rate_with_five_percent}")
                 return rate_with_five_percent
