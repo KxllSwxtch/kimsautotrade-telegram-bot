@@ -567,9 +567,7 @@ def calculate_cost(country, message):
 
             # Расчеты в USDT
             total_korea_costs_usdt = total_korea_costs / usdt_krw_rate
-
-            total_korea_costs_usd = total_korea_costs / usd_rate_krw
-            total_korea_costs_rub = total_korea_costs_usd * usd_rub_rate
+            total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
 
             total_russia_costs = (
                 customs_duty + recycling_fee + customs_fee + 120000 + 250000
@@ -581,9 +579,7 @@ def calculate_cost(country, message):
             total_cost = total_korea_costs_rub + total_russia_costs
 
             total_cost_usdt = total_korea_costs_usdt + total_russia_costs_usdt
-            total_cost_usdt_rub = (
-                total_korea_costs_usdt + total_russia_costs_usdt
-            ) * usdt_rub_rate
+            total_cost_usdt_rub = total_cost_usdt * usdt_rub_rate
 
             car_data["price_rub"] = car_price_rub
             car_data["duty"] = customs_fee
