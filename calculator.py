@@ -33,7 +33,7 @@ from utils import (
 load_dotenv()
 
 CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH_LOCAL")
-DATABASE_URL = "postgres://uea5qru3fhjlj:p44343a46d4f1882a5ba2413935c9b9f0c284e6e759a34cf9569444d16832d4fe@c97r84s7psuajm.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com:5432/d9pr93olpfl9bj"
+DATABASE_URL = "postgres://ud5v8u038bcsqc:p9ad496822274f376009067f9578c5acae5baf03a2a67c5fc69cf36982fc8bd3c@c9srcab37moub2.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com:5432/dantc57en2dif2"
 
 
 # Переменные
