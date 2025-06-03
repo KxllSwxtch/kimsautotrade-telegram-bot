@@ -622,11 +622,11 @@ def calculate_cost(country, message):
                     callback_data="technical_report",
                 )
             )
-            keyboard.add(
-                types.InlineKeyboardButton(
-                    "✉️ Связаться с менеджером Рамисом", url="https://wa.me/821080296232"
-                )
-            )
+            # keyboard.add(
+            #     types.InlineKeyboardButton(
+            #         "✉️ Связаться с менеджером Рамисом", url="https://wa.me/821080296232"
+            #     )
+            # )
             keyboard.add(
                 types.InlineKeyboardButton(
                     "🔍 Рассчитать стоимость другого автомобиля",
