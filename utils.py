@@ -2,10 +2,28 @@ import requests
 import gc
 import datetime
 import locale
+import time
 from kgs_customs_table import KGS_CUSTOMS_TABLE
 
 HTTP_PROXY = "http://B01vby:GBno0x@45.118.250.2:8000"
 proxies = {"http": HTTP_PROXY, "https": HTTP_PROXY}
+
+# Rate limiting для calcus.ru - максимум 5 запросов в секунду
+_last_request_time = 0
+_min_request_interval = 0.2  # 1/5 секунды между запросами
+
+
+def _rate_limit():
+    """Применяет ограничение скорости запросов к calcus.ru"""
+    global _last_request_time
+    current_time = time.time()
+    time_since_last_request = current_time - _last_request_time
+
+    if time_since_last_request < _min_request_interval:
+        sleep_time = _min_request_interval - time_since_last_request
+        time.sleep(sleep_time)
+
+    _last_request_time = time.time()
 
 
 # Очищение памяти
@@ -50,6 +68,7 @@ def get_customs_fees_russia(
     }
 
     try:
+        _rate_limit()
         response = requests.post(url, data=payload, headers=headers)
         response.raise_for_status()
         return response.json()
