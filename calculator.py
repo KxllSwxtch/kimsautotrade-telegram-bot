@@ -570,10 +570,10 @@ def calculate_cost(country, message):
             total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
 
             total_russia_costs = (
-                customs_duty + recycling_fee + customs_fee + 120000 + 250000
+                customs_duty + recycling_fee + customs_fee + 100000 + 250000
             )
             total_russia_costs_usdt = (
-                customs_duty + recycling_fee + customs_fee + 120000 + 250000
+                customs_duty + recycling_fee + customs_fee + 100000 + 250000
             ) / usdt_rub_rate
 
             total_cost = total_korea_costs_rub + total_russia_costs
@@ -599,7 +599,7 @@ def calculate_cost(country, message):
                 f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT (курс: 1 USDT = {format_number(usdt_krw_rate)} ₩) | {format_number(total_korea_costs_rub)} ₽\n\n"
                 f"<b>Расходы по России:</b>\n"
                 f"Таможенные платежи: {format_number(customs_duty + customs_fee + recycling_fee)} ₽\n"
-                f"Услуги Брокера: 120,000 ₽ (можно снизить на 1.5% если заплатить самому таможенные платежи)\n"
+                f"Услуги Брокера: 100,000 ₽ (если клиент оплачивает таможенные платежи)\n"
                 f"Автовоз: 250,000 ₽ (в зависимости от региона и вида автовоза, фуры)\n"
                 f"Итого: {format_number(total_russia_costs)} ₽\n\n"
                 f"<b>Итого стоимость автомобиля под ключ (USDT): (курс: 1 USDT = {format_number(usdt_rub_rate)} ₽)</b>\n"
@@ -971,7 +971,7 @@ def handle_callback_query(call):
                 f"Утилизационный сбор: {format_number(car_data['recycling_fee'])} ₽\n\n"
                 # f"Акциза: {format_number(car_data['excise'])} ₽\n\n"
                 f"Логистика до Владивостока: 110,000 ₽\n\n"
-                f"Услуги брокера: 120,000 ₽\n\n"
+                f"Услуги брокера: 100,000 ₽\n\n"
                 f"<b>Итоговая стоимость автомобиля: {format_number(car_data['total_price'])} ₽</b>\n\n"
                 f"<b>ПРИМЕЧАНИЕ: ЦЕНА НА АВТОМОБИЛЬ ЗАВИСИТ ОТ ТЕКУЩЕГО КУРСА, ДЛЯ БОЛЕЕ ТОЧНОЙ ИНФОРМАЦИИ НАПИШИТЕ НАШЕМУ МЕНЕДЖЕРУ +82-10-8029-6232</b>"
             )
@@ -1139,7 +1139,7 @@ def calculate_cost_manual(country, year, month, engine_volume, price, car_type):
 
         # Расходы в России
         total_russia_costs = (
-            customs_duty + recycling_fee + customs_fee + 120000 + 250000
+            customs_duty + recycling_fee + customs_fee + 100000 + 250000
         )
         total_russia_costs_usdt = total_russia_costs / usdt_rub_rate
 
