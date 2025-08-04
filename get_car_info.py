@@ -54,24 +54,30 @@ def get_car_info(url):
             # Сохранение данных в базу
             conn = psycopg2.connect(DATABASE_URL, sslmode="require")
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO car_info (car_id, date, engine_volume, price, car_type)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (car_id) DO NOTHING
-                """,
-                (
-                    car_id,
-                    formatted_car_date,
-                    car_engine_displacement,
-                    car_price,
-                    formatted_car_type,
-                ),
-            )
-            conn.commit()
-            cursor.close()
-            conn.close()
-            print("Автомобиль был сохранён в базе данных")
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO car_info (car_id, date, engine_volume, price, car_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (date, engine_volume, price) DO UPDATE 
+                    SET car_id = EXCLUDED.car_id, car_type = EXCLUDED.car_type
+                    """,
+                    (
+                        car_id,
+                        formatted_car_date,
+                        car_engine_displacement,
+                        car_price,
+                        formatted_car_type,
+                    ),
+                )
+                conn.commit()
+                print("Автомобиль был сохранён в базе данных")
+            except psycopg2.Error as e:
+                print(f"Ошибка при сохранении в базу данных: {e}")
+                conn.rollback()
+            finally:
+                cursor.close()
+                conn.close()
 
             driver.quit()
             return [car_date, car_price, car_engine_displacement, formatted_car_type]
