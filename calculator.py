@@ -558,6 +558,16 @@ def calculate_cost(country, message):
                 car_engine_displacement, price_krw, year, month, engine_type=1
             )
 
+            # Проверяем что API вернул валидный ответ
+            if response is None:
+                bot.send_message(
+                    chat_id,
+                    "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
+                    "Попробуйте повторить запрос через несколько минут.\n\n"
+                    "Для получения расчета напишите менеджеру: +82-10-8029-6232",
+                )
+                return
+
             # Таможенный сбор
             customs_fee = clean_number(response["sbor"])
 
@@ -1128,6 +1138,17 @@ def calculate_cost_manual(country, year, month, engine_volume, price, car_type):
         response = get_customs_fees_russia(
             engine_volume, price_krw, year, month, engine_type=1
         )
+
+        # Проверяем что API вернул валидный ответ
+        if response is None:
+            bot.send_message(
+                chat_id,
+                "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
+                "Попробуйте повторить запрос через несколько минут.\n\n"
+                "Для получения расчета напишите менеджеру: +82-10-8029-6232",
+            )
+            return
+
         customs_duty = clean_number(response["tax"])
         customs_fee = clean_number(response["sbor"])
         recycling_fee = clean_number(response["util"])

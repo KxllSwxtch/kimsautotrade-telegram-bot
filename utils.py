@@ -3,27 +3,32 @@ import gc
 import datetime
 import locale
 import time
+import threading
+import random
 from kgs_customs_table import KGS_CUSTOMS_TABLE
 
 HTTP_PROXY = "http://B01vby:GBno0x@45.118.250.2:8000"
 proxies = {"http": HTTP_PROXY, "https": HTTP_PROXY}
 
-# Rate limiting для calcus.ru - максимум 5 запросов в секунду
+# Enhanced rate limiting для calcus.ru - максимум 4 запроса в секунду для безопасности
 _last_request_time = 0
-_min_request_interval = 0.2  # 1/5 секунды между запросами
+_min_request_interval = 0.25  # 1/4 секунды между запросами (4 req/sec)
+_rate_limit_lock = threading.Lock()  # Thread-safe rate limiting
 
 
 def _rate_limit():
-    """Применяет ограничение скорости запросов к calcus.ru"""
+    """Применяет ограничение скорости запросов к calcus.ru с thread-safe механизмом"""
     global _last_request_time
-    current_time = time.time()
-    time_since_last_request = current_time - _last_request_time
 
-    if time_since_last_request < _min_request_interval:
-        sleep_time = _min_request_interval - time_since_last_request
-        time.sleep(sleep_time)
+    with _rate_limit_lock:
+        current_time = time.time()
+        time_since_last_request = current_time - _last_request_time
 
-    _last_request_time = time.time()
+        if time_since_last_request < _min_request_interval:
+            sleep_time = _min_request_interval - time_since_last_request
+            time.sleep(sleep_time)
+
+        _last_request_time = time.time()
 
 
 # Очищение памяти
@@ -40,14 +45,16 @@ def get_customs_fees_russia(
     engine_volume, car_price, car_year, car_month, engine_type=1
 ):
     """
-    Запрашивает расчёт таможенных платежей с сайта calcus.ru.
+    Запрашивает расчёт таможенных платежей с сайта calcus.ru с retry логикой.
     :param engine_volume: Объём двигателя (куб. см)
     :param car_price: Цена авто в вонах
     :param car_year: Год выпуска авто
     :param engine_type: Тип двигателя (1 - бензин, 2 - дизель, 3 - гибрид, 4 - электромобиль)
-    :return: JSON с результатами расчёта
+    :return: JSON с результатами расчёта или None при ошибке
     """
     url = "https://calcus.ru/calculate/Customs"
+    max_retries = 4
+    base_delay = 1.0
 
     payload = {
         "owner": 1,  # Физлицо
@@ -67,14 +74,45 @@ def get_customs_fees_russia(
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    try:
-        _rate_limit()
-        response = requests.post(url, data=payload, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Ошибка при запросе к calcus.ru: {e}")
-        return None
+    for attempt in range(max_retries):
+        try:
+            _rate_limit()
+            response = requests.post(url, data=payload, headers=headers, timeout=10)
+
+            if response.status_code == 429:
+                # Exponential backoff для 429 ошибок
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                print(f"Получен 429 ответ от calcus.ru, ожидание {delay:.2f} секунд... (попытка {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+                continue
+
+            response.raise_for_status()
+            result = response.json()
+
+            # Проверяем что ответ содержит необходимые поля
+            if result and isinstance(result, dict) and all(key in result for key in ["sbor", "tax", "util"]):
+                print(f"Успешный запрос к calcus.ru (попытка {attempt + 1})")
+                return result
+            else:
+                print(f"Неполный ответ от calcus.ru: {result}")
+                if attempt < max_retries - 1:
+                    time.sleep(base_delay)
+                    continue
+
+        except requests.Timeout:
+            print(f"Таймаут запроса к calcus.ru (попытка {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(base_delay * (attempt + 1))
+                continue
+        except requests.RequestException as e:
+            print(f"Ошибка при запросе к calcus.ru (попытка {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                time.sleep(delay)
+                continue
+
+    print("Все попытки запроса к calcus.ru исчерпаны")
+    return None
 
 
 def calculate_customs_fee_kg(engine_volume, car_year):
