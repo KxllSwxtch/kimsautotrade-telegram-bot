@@ -10,6 +10,8 @@ from calculator import (
     get_nbk_currency_rates,
     get_nbkr_currency_rates,
     calculate_cost_manual,
+    pending_calculations,
+    complete_russia_calculation_with_hp,
 )
 from config import bot
 
@@ -243,6 +245,59 @@ def handle_link_input(message):
         message.chat.id,
         "Отправьте ссылку на автомобиль с сайта kimsautotrade.com или encar.com",
     )
+
+
+###############
+# ОБРАБОТКА ВВОДА HP (МОЩНОСТИ) ДЛЯ РОССИИ
+###############
+def is_awaiting_hp_input(chat_id):
+    """Проверяет, ожидает ли пользователь ввода HP"""
+    return chat_id in pending_calculations
+
+
+@bot.message_handler(func=lambda message: is_awaiting_hp_input(message.chat.id))
+def handle_hp_input(message):
+    """Обработчик ввода мощности двигателя (HP) для расчёта таможни"""
+    chat_id = message.chat.id
+
+    # Проверяем, что пользователь ввёл число
+    try:
+        hp = int(message.text.strip())
+        if hp <= 0 or hp > 2000:
+            raise ValueError("Invalid HP range")
+    except ValueError:
+        bot.send_message(
+            chat_id,
+            "❌ Пожалуйста, введите корректное значение мощности (число от 1 до 2000).\n"
+            "Например: 132",
+        )
+        return
+
+    # Получаем данные незавершённого расчёта
+    pending = pending_calculations.pop(chat_id, None)
+    if not pending:
+        bot.send_message(chat_id, "❌ Ошибка: данные расчёта не найдены. Попробуйте снова.")
+        return
+
+    # Отправляем сообщение о процессе
+    processing_msg = bot.send_message(chat_id, "⏳ Расчёт таможенных платежей...")
+
+    try:
+        # Завершаем расчёт с указанным HP
+        complete_russia_calculation_with_hp(chat_id, pending, hp)
+    except Exception as e:
+        bot.send_message(
+            chat_id,
+            "❌ Ошибка при расчёте. Пожалуйста, попробуйте снова.\n\n"
+            "Для помощи напишите менеджеру: +82-10-8029-6232",
+        )
+        print(f"Ошибка при расчёте с HP: {e}")
+    finally:
+        # Удаляем сообщение о процессе
+        try:
+            bot.delete_message(chat_id, processing_msg.message_id)
+        except Exception:
+            pass
 
 
 ###############

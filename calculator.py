@@ -26,6 +26,8 @@ from utils import (
     calculate_age,
     calculate_customs_fee_kg,
     get_customs_fees_russia,
+    get_car_data_from_panauto,
+    map_fuel_type_to_engine_code,
     clean_number,
 )
 
@@ -41,6 +43,9 @@ car_data = {}
 car_id_external = None
 vehicle_no = None
 vehicle_id = None
+
+# Для хранения незавершённых расчётов (когда требуется ввод HP от пользователя)
+pending_calculations = {}
 
 
 # Для Казахстана
@@ -403,6 +408,7 @@ def get_car_info(url):
     month = car_date[4:]
     car_engine_displacement = str(response["spec"]["displacement"])
     car_type = response["spec"]["bodyName"]
+    fuel_type = response["spec"].get("fuelName", "가솔린")  # Default to gasoline
 
     # Для получения данных по страховым выплатам
     vehicle_no = response["vehicleNo"]
@@ -413,7 +419,7 @@ def get_car_info(url):
     formatted_car_type = "crossover" if car_type == "SUV" else "sedan"
 
     print_message(
-        f"ID: {car_id}\nType: {formatted_car_type}\nDate: {formatted_car_date}\nCar Engine Displacement: {car_engine_displacement}\nPrice: {car_price} KRW"
+        f"ID: {car_id}\nType: {formatted_car_type}\nDate: {formatted_car_date}\nCar Engine Displacement: {car_engine_displacement}\nPrice: {car_price} KRW\nFuel: {fuel_type}"
     )
 
     # Сохранение данных в базу
@@ -444,7 +450,7 @@ def get_car_info(url):
         cursor.close()
         conn.close()
 
-    return [formatted_car_date, car_price, car_engine_displacement, formatted_car_type]
+    return [formatted_car_date, car_price, car_engine_displacement, formatted_car_type, fuel_type]
 
 
 def calculate_cost(country, message):
@@ -496,7 +502,7 @@ def calculate_cost(country, message):
         car_id = query_params.get("carid", [None])[0]
 
     result = get_car_info(link)
-    car_date, car_price, car_engine_displacement, car_type = result
+    car_date, car_price, car_engine_displacement, car_type, fuel_type = result
 
     # Обработка ошибки получения данных
     if not car_date or not car_price or not car_engine_displacement:
@@ -554,28 +560,53 @@ def calculate_cost(country, message):
             price_krw = int(car_price) * 10000
             car_price_rub = price_krw * krw_rub_rate
 
-            response = get_customs_fees_russia(
-                car_engine_displacement, price_krw, year, month, engine_type=1
-            )
+            # Пробуем получить данные с pan-auto.ru (включая уже рассчитанные таможенные платежи)
+            panauto_data = get_car_data_from_panauto(car_id_external)
 
-            # Проверяем что API вернул валидный ответ
-            if response is None:
+            if panauto_data and panauto_data.get("customs"):
+                # Используем предрассчитанные значения с pan-auto.ru
+                print_message(f"Используем данные таможни с pan-auto.ru: HP={panauto_data.get('hp')}")
+                customs_fee = int(panauto_data["customs"]["sbor"])
+                customs_duty = int(panauto_data["customs"]["tax"])
+                recycling_fee = int(panauto_data["customs"]["util"])
+            else:
+                # Pan-auto.ru не нашёл авто - запрашиваем HP у пользователя
+                print_message("Авто не найдено на pan-auto.ru, запрашиваем HP у пользователя")
+
+                # Сохраняем данные для продолжения расчёта после ввода HP
+                pending_calculations[message.chat.id] = {
+                    "car_data": result,
+                    "link": link,
+                    "fuel_type": fuel_type,
+                    "year": year,
+                    "month": month,
+                    "price_krw": price_krw,
+                    "car_price_rub": car_price_rub,
+                    "car_engine_displacement": car_engine_displacement,
+                    "age": age,
+                    "age_formatted": age_formatted,
+                    "engine_volume_formatted": engine_volume_formatted,
+                    "usdt_krw_rate": usdt_krw_rate,
+                    "usdt_rub_rate": usdt_rub_rate,
+                    "car_id": car_id_external,
+                }
+
                 bot.send_message(
-                    chat_id,
-                    "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
-                    "Попробуйте повторить запрос через несколько минут.\n\n"
-                    "Для получения расчета напишите менеджеру: +82-10-8029-6232",
+                    message.chat.id,
+                    "🔧 Не удалось автоматически определить мощность автомобиля.\n\n"
+                    "Пожалуйста, введите мощность двигателя в л.с. (лошадиных силах).\n"
+                    "Например: 132",
                 )
                 return
 
-            # Таможенный сбор
-            customs_fee = clean_number(response["sbor"])
+            # Таможенный сбор (уже получен выше)
+            # customs_fee = ...
 
-            # Таможенная пошлина
-            customs_duty = clean_number(response["tax"])
+            # Таможенная пошлина (уже получена выше)
+            # customs_duty = ...
 
-            # Рассчитываем утилизационный сбор
-            recycling_fee = clean_number(response["util"])
+            # Утилизационный сбор (уже получен выше)
+            # recycling_fee = ...
 
             excise = 2040000
 
@@ -932,6 +963,130 @@ def calculate_cost(country, message):
             bot.delete_message(message.chat.id, processing_message.message_id)
 
 
+def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
+    """
+    Завершает расчёт стоимости для России когда пользователь ввёл HP вручную.
+
+    :param chat_id: ID чата пользователя
+    :param pending_data: Сохранённые данные из pending_calculations
+    :param hp: Мощность двигателя в л.с., введённая пользователем
+    """
+    global car_data, car_id_external
+
+    # Извлекаем сохранённые данные
+    car_date, car_price, car_engine_displacement, car_type, fuel_type = pending_data["car_data"]
+    year = pending_data["year"]
+    month = pending_data["month"]
+    price_krw = pending_data["price_krw"]
+    car_price_rub = pending_data["car_price_rub"]
+    age = pending_data["age"]
+    age_formatted = pending_data["age_formatted"]
+    engine_volume_formatted = pending_data["engine_volume_formatted"]
+    usdt_krw_rate = pending_data["usdt_krw_rate"]
+    usdt_rub_rate = pending_data["usdt_rub_rate"]
+    car_id = pending_data["car_id"]
+
+    # Обновляем глобальную переменную car_id_external
+    car_id_external = car_id
+
+    # Получаем код типа двигателя из названия топлива
+    engine_code = map_fuel_type_to_engine_code(fuel_type)
+
+    print_message(f"Расчёт таможни через calcus.ru: HP={hp}, engine_type={engine_code}, fuel={fuel_type}")
+
+    # Вызываем calcus.ru с указанным HP
+    response = get_customs_fees_russia(
+        car_engine_displacement,
+        price_krw,
+        year,
+        month,
+        engine_type=engine_code,
+        horse_power=hp,
+    )
+
+    # Проверяем что API вернул валидный ответ
+    if response is None:
+        bot.send_message(
+            chat_id,
+            "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
+            "Попробуйте повторить запрос через несколько минут.\n\n"
+            "Для получения расчета напишите менеджеру: +82-10-8029-6232",
+        )
+        return
+
+    # Таможенный сбор
+    customs_fee = clean_number(response["sbor"])
+
+    # Таможенная пошлина
+    customs_duty = clean_number(response["tax"])
+
+    # Утилизационный сбор
+    recycling_fee = clean_number(response["util"])
+
+    excise = 2040000
+
+    total_korea_costs = price_krw + excise
+
+    # Расчеты в USDT
+    total_korea_costs_usdt = total_korea_costs / usdt_krw_rate
+    total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
+
+    total_russia_costs = customs_duty + recycling_fee + customs_fee + 100000 + 250000
+    total_russia_costs_usdt = total_russia_costs / usdt_rub_rate
+
+    total_cost = total_korea_costs_rub + total_russia_costs
+
+    total_cost_usdt = total_korea_costs_usdt + total_russia_costs_usdt
+    total_cost_usdt_rub = total_cost_usdt * usdt_rub_rate
+
+    # Сохраняем данные для детализации
+    car_data["price_rub"] = car_price_rub
+    car_data["duty"] = customs_fee
+    car_data["recycling_fee"] = recycling_fee
+    car_data["total_price"] = total_cost
+    car_data["customs_duty_fee"] = customs_duty
+
+    # Формирование сообщения результата
+    result_message = (
+        f"Возраст: {age_formatted}\n"
+        f"Объём двигателя: {engine_volume_formatted}\n"
+        f"Мощность: {hp} л.с.\n\n"
+        f"<b>Корея:</b>\n"
+        f"Стоимость автомобиля: {format_number(price_krw)} ₩\n"
+        f"Расходы по Корее (паром, автовоз, документы): {format_number(excise)} ₩\n"
+        f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT (курс: 1 USDT = {format_number(usdt_krw_rate)} ₩) | {format_number(total_korea_costs_rub)} ₽\n\n"
+        f"<b>Расходы по России:</b>\n"
+        f"Таможенные платежи: {format_number(customs_duty + customs_fee + recycling_fee)} ₽\n"
+        f"Услуги Брокера: 100,000 ₽ (если клиент оплачивает таможенные платежи)\n"
+        f"Автовоз: 250,000 ₽ (в зависимости от региона и вида автовоза, фуры)\n"
+        f"Итого: {format_number(total_russia_costs)} ₽\n\n"
+        f"<b>Итого стоимость автомобиля под ключ (USDT): (курс: 1 USDT = {format_number(usdt_rub_rate)} ₽)</b>\n"
+        f"${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"
+    )
+
+    # Клавиатура с дальнейшими действиями
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "📝 Технический отчёт об автомобиле",
+            callback_data="technical_report",
+        )
+    )
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "🔍 Рассчитать стоимость другого автомобиля",
+            callback_data="calculate_another",
+        )
+    )
+
+    bot.send_message(
+        chat_id,
+        result_message,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
 def get_insurance_total():
     global car_id_external, vehicle_no, vehicle_id
 
@@ -1120,7 +1275,19 @@ def handle_callback_query(call):
 
 
 # Расчёты для ручного ввода
-def calculate_cost_manual(country, year, month, engine_volume, price, car_type):
+def calculate_cost_manual(country, year, month, engine_volume, price, car_type, hp=None, fuel_type=None):
+    """
+    Ручной расчёт стоимости автомобиля.
+
+    :param country: Страна назначения ("Russia", "Kazakhstan", "Kyrgyzstan")
+    :param year: Год выпуска
+    :param month: Месяц выпуска
+    :param engine_volume: Объём двигателя в см³
+    :param price: Цена в KRW
+    :param car_type: Тип кузова ("sedan" или "crossover")
+    :param hp: Мощность в л.с. (для России, обязательно с декабря 2025)
+    :param fuel_type: Тип топлива (для определения типа двигателя)
+    """
     global eur_rub_rate, usdt_krw_rate, usdt_rub_rate
 
     if country == "Russia":
@@ -1135,8 +1302,11 @@ def calculate_cost_manual(country, year, month, engine_volume, price, car_type):
         price_krw = int(price)
         car_price_rub = price_krw * krw_rub_rate
 
+        # Определяем код типа двигателя
+        engine_code = map_fuel_type_to_engine_code(fuel_type) if fuel_type else 1
+
         response = get_customs_fees_russia(
-            engine_volume, price_krw, year, month, engine_type=1
+            engine_volume, price_krw, year, month, engine_type=engine_code, horse_power=hp
         )
 
         # Проверяем что API вернул валидный ответ

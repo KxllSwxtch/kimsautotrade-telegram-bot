@@ -10,6 +10,88 @@ from kgs_customs_table import KGS_CUSTOMS_TABLE
 HTTP_PROXY = "http://B01vby:GBno0x@45.118.250.2:8000"
 proxies = {"http": HTTP_PROXY, "https": HTTP_PROXY}
 
+
+def map_fuel_type_to_engine_code(fuel_type):
+    """
+    Maps fuel type to calcus.ru engine code.
+    Supports Korean (from encar API) and Russian (from pan-auto.ru) fuel names.
+
+    Engine codes:
+    1 - Gasoline
+    2 - Diesel
+    4 - Electric
+    5 - Sequential Hybrid (Последовательный гибрид)
+    6 - Parallel Hybrid (Параллельный гибрид)
+    """
+    fuel_mapping = {
+        # Korean fuel names (from encar.com API spec.fuelName)
+        "가솔린": 1,  # Gasoline
+        "디젤": 2,  # Diesel
+        "전기": 4,  # Electric
+        "하이브리드": 6,  # Hybrid (default to parallel)
+        "LPG": 1,  # Treat LPG as gasoline
+        # Russian fuel names (from pan-auto.ru API)
+        "Бензин": 1,
+        "Дизель": 2,
+        "Электро": 4,
+        "Электромобиль": 4,
+        "Гибрид": 6,
+        "Последовательный гибрид": 5,
+        "Параллельный гибрид": 6,
+    }
+    return fuel_mapping.get(fuel_type, 1)  # Default to gasoline
+
+
+def get_car_data_from_panauto(car_id):
+    """
+    Fetches car data from pan-auto.ru API.
+    Returns dict with hp, fuel_type, and pre-calculated customs values if found.
+    Returns None if car not found or API error.
+    """
+    url = f"https://zefir.pan-auto.ru/api/cars/{car_id}/"
+
+    headers = {
+        "Accept": "*/*",
+        "Accept-Language": "en,ru;q=0.9",
+        "Connection": "keep-alive",
+        "Origin": "https://pan-auto.ru",
+        "Referer": "https://pan-auto.ru/",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 404:
+            print(f"Car {car_id} not found on pan-auto.ru")
+            return None
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract customs values from RUB costs
+        rub_costs = data.get("costs", {}).get("RUB", {})
+
+        result = {
+            "hp": data.get("hp"),  # Horsepower
+            "fuel_type": data.get("fuelType"),  # Russian fuel name
+            "customs": {
+                "sbor": rub_costs.get("clearanceCost", 0),  # Customs fee (сбор)
+                "tax": rub_costs.get("customsDuty", 0),  # Customs duty (пошлина)
+                "util": rub_costs.get("utilizationFee", 0),  # Utilization fee (утильсбор)
+            },
+        }
+
+        print(
+            f"Pan-auto.ru data for car {car_id}: HP={result['hp']}, fuel={result['fuel_type']}"
+        )
+        return result
+    except requests.RequestException as e:
+        print(f"Error fetching from pan-auto.ru: {e}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error fetching from pan-auto.ru: {e}")
+        return None
+
+
 # Enhanced rate limiting для calcus.ru - максимум 4 запроса в секунду для безопасности
 _last_request_time = 0
 _min_request_interval = 0.25  # 1/4 секунды между запросами (4 req/sec)
@@ -42,25 +124,32 @@ def clean_number(value):
 
 
 def get_customs_fees_russia(
-    engine_volume, car_price, car_year, car_month, engine_type=1
+    engine_volume, car_price, car_year, car_month, engine_type=1, horse_power=None
 ):
     """
     Запрашивает расчёт таможенных платежей с сайта calcus.ru с retry логикой.
     :param engine_volume: Объём двигателя (куб. см)
     :param car_price: Цена авто в вонах
     :param car_year: Год выпуска авто
-    :param engine_type: Тип двигателя (1 - бензин, 2 - дизель, 3 - гибрид, 4 - электромобиль)
+    :param car_month: Месяц выпуска авто
+    :param engine_type: Тип двигателя (1 - бензин, 2 - дизель, 4 - электро, 5 - послед. гибрид, 6 - парал. гибрид)
+    :param horse_power: Мощность двигателя в л.с. (обязательно с декабря 2025)
     :return: JSON с результатами расчёта или None при ошибке
     """
     url = "https://calcus.ru/calculate/Customs"
     max_retries = 4
     base_delay = 1.0
 
+    # Если мощность не указана, используем расчётную (объём / 15)
+    if horse_power is None:
+        horse_power = calculate_horse_power(engine_volume)
+        print(f"HP not provided, using estimated value: {horse_power}")
+
     payload = {
         "owner": 1,  # Физлицо
         "age": calculate_age(car_year, car_month),  # Возрастная категория
-        "engine": engine_type,  # Тип двигателя (по умолчанию 1 - бензин)
-        "power": 1,  # Лошадиные силы (можно оставить 1)
+        "engine": engine_type,  # Тип двигателя
+        "power": int(horse_power),  # Мощность в л.с.
         "power_unit": 1,  # Тип мощности (1 - л.с.)
         "value": int(engine_volume),  # Объём двигателя
         "price": int(car_price),  # Цена авто в KRW
