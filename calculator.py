@@ -73,28 +73,37 @@ car_fuel_type = ""
 
 def get_usdt_to_krw_rate_bithumb():
     try:
-        # Используем API Bithumb для получения курса USDT-KRW
-        url = "https://api.bithumb.com/v1/ticker?markets=KRW-USDT"
-        response = requests.get(url)
+        # Используем Naver Stock API для получения курса USDT-KRW (Bithumb)
+        url = "https://m.stock.naver.com/front-api/realTime/crypto"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+        }
+        payload = {"fqnfTickers": ["USDT_KRW_BITHUMB"]}
 
-        if response.status_code == 200:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+
+        if response.status_code == 200 and response.text:
             data = response.json()
-            if data and data[0] and data[0]["trade_price"]:
-                # Получаем курс из ответа API и вычитаем 40 пунктов
-                raw_rate = float(data[0]["trade_price"])
-                adjusted_rate = raw_rate - 40
+            if data.get("isSuccess") and data.get("result"):
+                bithumb_data = data["result"].get("USDT_KRW_BITHUMB")
+                if bithumb_data and bithumb_data.get("tradePrice"):
+                    # Получаем курс из ответа API и вычитаем 40 пунктов
+                    raw_rate = float(bithumb_data["tradePrice"])
+                    adjusted_rate = raw_rate - 40
 
-                # Форматируем до целого числа
-                formatted_rate = round(adjusted_rate)
+                    # Форматируем до целого числа
+                    formatted_rate = round(adjusted_rate)
 
-                print(f"Курс USDT к KRW (Bithumb) -> {formatted_rate}")
-                return formatted_rate
+                    print(f"Курс USDT к KRW (Naver/Bithumb) -> {formatted_rate}")
+                    return formatted_rate
 
         # Если не удалось получить данные, используем запасной метод
-        print("Не удалось получить курс USDT-KRW с Bithumb, используем запасной метод")
+        print("Не удалось получить курс USDT-KRW, используем запасной метод")
         return get_usdt_to_krw_rate()
     except Exception as e:
-        print(f"Ошибка при получении курса USDT-KRW с Bithumb: {e}")
+        print(f"Ошибка при получении курса USDT-KRW: {e}")
         return get_usdt_to_krw_rate()
 
 
@@ -128,17 +137,25 @@ def get_usdt_to_rub_rate():
 
 
 def get_usdt_to_krw_rate():
-    # URL для получения курса USDT к KRW
-    url = "https://api.coinbase.com/v2/exchange-rates?currency=USDT"
-    response = requests.get(url)
-    data = response.json()
+    try:
+        # URL для получения курса USDT к KRW
+        url = "https://api.coinbase.com/v2/exchange-rates?currency=USDT"
+        response = requests.get(url, timeout=10)
 
-    # Извлечение курса KRW
-    krw_rate = data["data"]["rates"]["KRW"]
+        if response.status_code == 200 and response.text:
+            data = response.json()
+            if data and data.get("data") and data["data"].get("rates"):
+                krw_rate = data["data"]["rates"].get("KRW")
+                if krw_rate:
+                    rate = float(krw_rate) + 4
+                    print(f"Курс USDT к KRW -> {rate}")
+                    return rate
 
-    print(f"Курс USDT к KRW -> {str(float(krw_rate) + 4)}")
-
-    return float(krw_rate) + 4
+        print("Не удалось получить курс USDT-KRW, используем запасное значение")
+        return 1400.0  # Запасное значение
+    except Exception as e:
+        print(f"Ошибка при получении курса USDT-KRW: {e}")
+        return 1400.0  # Запасное значение в случае ошибки
 
 
 def get_usd_to_krw_rate():
