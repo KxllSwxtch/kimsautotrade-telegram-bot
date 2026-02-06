@@ -634,10 +634,10 @@ def calculate_cost(country, message):
             total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
 
             total_russia_costs = (
-                customs_duty + recycling_fee + customs_fee + 100000 + 250000
+                customs_duty + recycling_fee + customs_fee + 74000
             )
             total_russia_costs_usdt = (
-                customs_duty + recycling_fee + customs_fee + 100000 + 250000
+                customs_duty + recycling_fee + customs_fee + 74000
             ) / usdt_rub_rate
 
             total_cost = total_korea_costs_rub + total_russia_costs
@@ -662,11 +662,11 @@ def calculate_cost(country, message):
                 f"Расходы по Корее (паром, автовоз, документы): {format_number(excise)} ₩\n"
                 f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT (курс: 1 USDT = {format_number(usdt_krw_rate)} ₩) | {format_number(total_korea_costs_rub)} ₽\n\n"
                 f"<b>Расходы по России:</b>\n"
-                f"Таможенные платежи: {format_number(customs_duty + customs_fee + recycling_fee)} ₽\n"
-                f"Услуги Брокера: 100,000 ₽ (если клиент оплачивает таможенные платежи)\n"
-                f"Автовоз: 250,000 ₽ (в зависимости от региона и вида автовоза, фуры)\n"
+                f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
+                f"Коммерческий утильсбор: {format_number(recycling_fee)} ₽\n"
+                f"Услуги Брокера: 74,000 ₽\n"
                 f"Итого: {format_number(total_russia_costs)} ₽\n\n"
-                f"<b>Итого стоимость автомобиля под ключ (USDT): (курс: 1 USDT = {format_number(usdt_rub_rate)} ₽)</b>\n"
+                f"<b>Итого стоимость автомобиля под ключ до Владивостока (USDT): (курс: 1 USDT = {format_number(usdt_rub_rate)} ₽)</b>\n"
                 f"${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"
                 # f"🔗 <a href='{preview_link}'>Ссылка на автомобиль</a>\n\n"
                 # "Если данное авто попадает под санкции, пожалуйста уточните возможность отправки в вашу страну по номеру:\n+82 10-8029-6232 (Рамис)\n\n"
@@ -1048,7 +1048,7 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     total_korea_costs_usdt = total_korea_costs / usdt_krw_rate
     total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
 
-    total_russia_costs = customs_duty + recycling_fee + customs_fee + 100000 + 250000
+    total_russia_costs = customs_duty + recycling_fee + customs_fee + 74000
     total_russia_costs_usdt = total_russia_costs / usdt_rub_rate
 
     total_cost = total_korea_costs_rub + total_russia_costs
@@ -1073,9 +1073,9 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
         f"Расходы по Корее (паром, автовоз, документы): {format_number(excise)} ₩\n"
         f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT (курс: 1 USDT = {format_number(usdt_krw_rate)} ₩) | {format_number(total_korea_costs_rub)} ₽\n\n"
         f"<b>Расходы по России:</b>\n"
-        f"Таможенные платежи: {format_number(customs_duty + customs_fee + recycling_fee)} ₽\n"
-        f"Услуги Брокера: 100,000 ₽ (если клиент оплачивает таможенные платежи)\n"
-        f"Автовоз: 250,000 ₽ (в зависимости от региона и вида автовоза, фуры)\n"
+        f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
+        f"Коммерческий утильсбор: {format_number(recycling_fee)} ₽\n"
+        f"Услуги Брокера: 74,000 ₽\n"
         f"Итого: {format_number(total_russia_costs)} ₽\n\n"
         f"<b>Итого стоимость автомобиля под ключ (USDT): (курс: 1 USDT = {format_number(usdt_rub_rate)} ₽)</b>\n"
         f"${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"

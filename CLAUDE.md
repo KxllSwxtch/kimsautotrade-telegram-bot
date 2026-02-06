@@ -306,3 +306,5 @@ bot.send_message(chat_id, "User-friendly error message")  # User notification
 - **User Activity**: Track calculation requests per country
 
 Remember: This bot handles financial calculations, so accuracy is critical. Always verify calculation logic against known test cases and provide clear cost breakdowns to users.
+
+Remember: Before working on any tasks make sure to first analyze the project's code to get a better understanding of what we're working on
