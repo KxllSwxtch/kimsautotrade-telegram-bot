@@ -12,6 +12,8 @@ from calculator import (
     calculate_cost_manual,
     pending_calculations,
     complete_russia_calculation_with_hp,
+    manual_calc_data,
+    complete_manual_russia_calculation,
 )
 from config import bot
 
@@ -137,13 +139,14 @@ def start(message):
     # Создание кнопочного меню
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_calc = types.KeyboardButton("Расчёт")
+    btn_manual = types.KeyboardButton("Ручной расчёт")
     btn_instagram = types.KeyboardButton("Instagram")
     btn_whatsapp = types.KeyboardButton("WhatsApp")
     btn_telegram = types.KeyboardButton("Telegram-канал")
     btn_manager = types.KeyboardButton("Контакты")
 
     # Добавление кнопок в меню
-    markup.add(btn_calc, btn_instagram, btn_whatsapp, btn_telegram, btn_manager)
+    markup.add(btn_calc, btn_manual, btn_instagram, btn_whatsapp, btn_telegram, btn_manager)
 
     # Отправка приветствия с кнопочным меню
     bot.send_message(message.chat.id, greeting, reply_markup=markup)
@@ -163,13 +166,18 @@ def main_menu(message):
     # Создание кнопочного меню
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_calc = types.KeyboardButton("Расчёт")
+    btn_manual = types.KeyboardButton("Ручной расчёт")
     btn_instagram = types.KeyboardButton("Instagram")
     btn_whatsapp = types.KeyboardButton("WhatsApp")
     btn_telegram = types.KeyboardButton("Telegram-канал")
     btn_manager = types.KeyboardButton("Контакты")
 
     # Добавление кнопок в меню
-    markup.add(btn_calc, btn_instagram, btn_whatsapp, btn_telegram, btn_manager)
+    markup.add(btn_calc, btn_manual, btn_instagram, btn_whatsapp, btn_telegram, btn_manager)
+
+    # Очищаем состояние ручного расчёта
+    if user_id in manual_calc_data:
+        del manual_calc_data[user_id]
 
     # Отправка приветствия с кнопочным меню
     bot.send_message(message.chat.id, greeting, reply_markup=markup)
@@ -245,6 +253,99 @@ def handle_link_input(message):
         message.chat.id,
         "Отправьте ссылку на автомобиль с сайта kimsautotrade.com или encar.com",
     )
+
+
+###############
+# РУЧНОЙ РАСЧЁТ (только Россия)
+###############
+@bot.message_handler(func=lambda message: message.text == "Ручной расчёт")
+def handle_manual_calc(message):
+    chat_id = message.chat.id
+    manual_calc_data[chat_id] = {"step": "age"}
+
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        types.InlineKeyboardButton("до 3 лет", callback_data="manual_age:0-3"),
+        types.InlineKeyboardButton("от 3 до 5 лет", callback_data="manual_age:3-5"),
+        types.InlineKeyboardButton("от 5 до 7 лет", callback_data="manual_age:5-7"),
+        types.InlineKeyboardButton("более 7 лет", callback_data="manual_age:7-0"),
+    )
+
+    # Клавиатура с кнопкой возврата
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("Вернуться в главное меню"))
+    bot.send_message(chat_id, "Выберите возраст автомобиля:", reply_markup=markup)
+    bot.send_message(chat_id, "Возраст автомобиля:", reply_markup=keyboard)
+
+
+def is_manual_calc_text_input(chat_id):
+    """Проверяет, ожидает ли пользователь текстовый ввод в ручном расчёте"""
+    mc = manual_calc_data.get(chat_id)
+    return mc and mc.get("step") in ("horsepower", "price")
+
+
+@bot.message_handler(func=lambda message: is_manual_calc_text_input(message.chat.id))
+def handle_manual_calc_text_input(message):
+    chat_id = message.chat.id
+    mc = manual_calc_data.get(chat_id)
+
+    if not mc:
+        return
+
+    if mc["step"] == "horsepower":
+        try:
+            hp = int(message.text.strip())
+            if hp <= 0 or hp > 2000:
+                raise ValueError("Invalid HP range")
+        except ValueError:
+            bot.send_message(
+                chat_id,
+                "❌ Пожалуйста, введите корректное значение мощности (число от 1 до 2000).\n"
+                "Например: 150",
+            )
+            return
+
+        mc["horsepower"] = hp
+        mc["step"] = "price"
+        bot.send_message(
+            chat_id,
+            "Введите стоимость автомобиля в корейских вонах (₩).\nНапример: 42500000",
+        )
+
+    elif mc["step"] == "price":
+        try:
+            price = int(message.text.strip().replace(" ", ""))
+            if price <= 0:
+                raise ValueError("Invalid price")
+        except ValueError:
+            bot.send_message(
+                chat_id,
+                "❌ Пожалуйста, введите корректную стоимость (положительное число).\n"
+                "Например: 42500000",
+            )
+            return
+
+        mc["price"] = price
+
+        # Отправляем сообщение о процессе
+        processing_msg = bot.send_message(chat_id, "⏳ Расчёт таможенных платежей...")
+
+        try:
+            complete_manual_russia_calculation(chat_id, mc)
+        except Exception as e:
+            bot.send_message(
+                chat_id,
+                "❌ Ошибка при расчёте. Пожалуйста, попробуйте снова.\n\n"
+                "Для помощи напишите менеджеру: +82-10-8029-6232",
+            )
+            print(f"Ошибка при ручном расчёте: {e}")
+        finally:
+            try:
+                bot.delete_message(chat_id, processing_msg.message_id)
+            except Exception:
+                pass
+            # Очищаем состояние
+            manual_calc_data.pop(chat_id, None)
 
 
 ###############

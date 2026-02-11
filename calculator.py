@@ -47,6 +47,9 @@ vehicle_id = None
 # Для хранения незавершённых расчётов (когда требуется ввод HP от пользователя)
 pending_calculations = {}
 
+# Для хранения данных ручного расчёта (Ручной расчёт)
+manual_calc_data = {}
+
 
 # Для Казахстана
 usd_rate_kz = 0
@@ -1104,6 +1107,110 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     )
 
 
+def complete_manual_russia_calculation(chat_id, manual_data):
+    """
+    Выполняет ручной расчёт стоимости для России по параметрам, введённым пользователем.
+
+    :param chat_id: ID чата пользователя
+    :param manual_data: Словарь с ключами: age, displacement, fuel_type, horsepower, price
+    """
+    age = manual_data["age"]
+    displacement = manual_data["displacement"]
+    fuel_type = manual_data["fuel_type"]
+    hp = manual_data["horsepower"]
+    price_krw = manual_data["price"]
+
+    # Маппинг age для отображения
+    age_display = {
+        "0-3": "до 3 лет",
+        "3-5": "от 3 до 5 лет",
+        "5-7": "от 5 до 7 лет",
+        "7-0": "более 7 лет",
+    }
+    age_formatted = age_display.get(age, age)
+
+    # Получаем курсы
+    usdt_krw = get_usdt_to_krw_rate_bithumb()
+    usdt_rub = get_usdt_to_rub_rate()
+
+    # Запрашиваем таможенные платежи с calcus.ru
+    response = get_customs_fees_russia(
+        displacement,
+        price_krw,
+        car_year=0,
+        car_month=0,
+        engine_type=fuel_type,
+        horse_power=hp,
+        age=age,
+    )
+
+    if response is None:
+        bot.send_message(
+            chat_id,
+            "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
+            "Попробуйте повторить запрос через несколько минут.\n\n"
+            "Для получения расчета напишите менеджеру: +82-10-8029-6232",
+        )
+        return
+
+    customs_fee = clean_number(response["sbor"])
+    customs_duty = clean_number(response["tax"])
+    recycling_fee = clean_number(response["util"])
+
+    excise = 2040000
+
+    total_korea_costs = price_krw + excise
+
+    # Расчеты в USDT
+    total_korea_costs_usdt = total_korea_costs / usdt_krw
+    total_korea_costs_rub = total_korea_costs_usdt * usdt_rub
+
+    total_russia_costs = customs_duty + recycling_fee + customs_fee + 74000
+    total_russia_costs_usdt = total_russia_costs / usdt_rub
+
+    total_cost_usdt = total_korea_costs_usdt + total_russia_costs_usdt
+    total_cost_usdt_rub = total_cost_usdt * usdt_rub
+
+    # Формирование сообщения результата
+    result_message = (
+        f"Возраст: {age_formatted}\n"
+        f"Объём двигателя: {format_number(displacement)} cc\n"
+        f"Мощность: {hp} л.с.\n\n"
+        f"<b>Корея:</b>\n"
+        f"Стоимость автомобиля: {format_number(price_krw)} ₩\n"
+        f"Расходы по Корее (паром, автовоз, документы): {format_number(excise)} ₩\n"
+        f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT | {format_number(total_korea_costs_rub)} ₽\n\n"
+        f"<b>Расходы по России:</b>\n"
+        f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
+        f"Коммерческий утильсбор: {format_number(recycling_fee)} ₽\n"
+        f"Услуги Брокера: 74,000 ₽\n"
+        f"Итого: {format_number(total_russia_costs)} ₽\n\n"
+        f"<b>Итого стоимость автомобиля под ключ (USDT): (курс: 1 USDT = {format_number(usdt_rub)} ₽)</b>\n"
+        f"${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"
+    )
+
+    # Клавиатура с дальнейшими действиями
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "🔍 Рассчитать стоимость другого автомобиля",
+            callback_data="calculate_another",
+        )
+    )
+    keyboard.add(
+        types.InlineKeyboardButton(
+            "✉️ Связаться с менеджером", url="https://wa.me/821080296232"
+        )
+    )
+
+    bot.send_message(
+        chat_id,
+        result_message,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
 def get_insurance_total():
     global car_id_external, vehicle_no, vehicle_id
 
@@ -1286,6 +1393,62 @@ def handle_callback_query(call):
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
+
+    elif call.data.startswith("manual_age:"):
+        chat_id = call.message.chat.id
+        age_value = call.data.split(":")[1]
+        manual_calc_data[chat_id] = {"step": "displacement", "age": age_value}
+
+        # Показываем кнопки выбора объёма двигателя
+        keyboard = types.InlineKeyboardMarkup(row_width=2)
+        displacements = [1000, 1500, 1600, 1800, 2000, 2200, 2500, 3000, 3500, 4000, 5000]
+        buttons = [
+            types.InlineKeyboardButton(f"{d} cc", callback_data=f"manual_disp:{d}")
+            for d in displacements
+        ]
+        keyboard.add(*buttons)
+        bot.edit_message_text(
+            "Выберите объём двигателя:",
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard,
+        )
+
+    elif call.data.startswith("manual_disp:"):
+        chat_id = call.message.chat.id
+        disp_value = int(call.data.split(":")[1])
+        if chat_id in manual_calc_data:
+            manual_calc_data[chat_id]["displacement"] = disp_value
+            manual_calc_data[chat_id]["step"] = "fuel_type"
+
+        # Показываем кнопки выбора типа топлива
+        keyboard = types.InlineKeyboardMarkup(row_width=1)
+        keyboard.add(
+            types.InlineKeyboardButton("Бензиновый", callback_data="manual_fuel:1"),
+            types.InlineKeyboardButton("Дизельный", callback_data="manual_fuel:2"),
+            types.InlineKeyboardButton("Электрический", callback_data="manual_fuel:4"),
+            types.InlineKeyboardButton("Последовательный гибрид", callback_data="manual_fuel:5"),
+            types.InlineKeyboardButton("Параллельный гибрид", callback_data="manual_fuel:6"),
+        )
+        bot.edit_message_text(
+            "Выберите тип двигателя:",
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            reply_markup=keyboard,
+        )
+
+    elif call.data.startswith("manual_fuel:"):
+        chat_id = call.message.chat.id
+        fuel_value = int(call.data.split(":")[1])
+        if chat_id in manual_calc_data:
+            manual_calc_data[chat_id]["fuel_type"] = fuel_value
+            manual_calc_data[chat_id]["step"] = "horsepower"
+
+        bot.edit_message_text(
+            "Введите мощность двигателя в л.с. (лошадиных силах).\nНапример: 150",
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+        )
 
     elif call.data == "calculate_another":
         show_country_selection(call.message.chat.id)
