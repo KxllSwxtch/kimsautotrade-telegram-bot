@@ -1,10 +1,12 @@
-import requests
-import gc
 import datetime
+import gc
 import locale
-import time
-import threading
 import random
+import threading
+import time
+
+import requests
+
 from kgs_customs_table import KGS_CUSTOMS_TABLE
 
 HTTP_PROXY = "http://B01vby:GBno0x@45.118.250.2:8000"
@@ -48,7 +50,7 @@ def get_car_data_from_panauto(car_id):
     Returns dict with hp, fuel_type, and pre-calculated customs values if found.
     Returns None if car not found or API error.
     """
-    url = f"https://zefir.pan-auto.ru/api/cars/{car_id}/"
+    url = f"https://zefir.pan-auto.ru/api/korea/{car_id}/"
 
     headers = {
         "Accept": "*/*",
@@ -76,7 +78,9 @@ def get_car_data_from_panauto(car_id):
             "customs": {
                 "sbor": rub_costs.get("clearanceCost", 0),  # Customs fee (сбор)
                 "tax": rub_costs.get("customsDuty", 0),  # Customs duty (пошлина)
-                "util": rub_costs.get("utilizationFee", 0),  # Utilization fee (утильсбор)
+                "util": rub_costs.get(
+                    "utilizationFee", 0
+                ),  # Utilization fee (утильсбор)
             },
         }
 
@@ -124,7 +128,13 @@ def clean_number(value):
 
 
 def get_customs_fees_russia(
-    engine_volume, car_price, car_year, car_month, engine_type=1, horse_power=None, age=None
+    engine_volume,
+    car_price,
+    car_year,
+    car_month,
+    engine_type=1,
+    horse_power=None,
+    age=None,
 ):
     """
     Запрашивает расчёт таможенных платежей с сайта calcus.ru с retry логикой.
@@ -148,7 +158,9 @@ def get_customs_fees_russia(
 
     payload = {
         "owner": 1,  # Физлицо
-        "age": age if age else calculate_age(car_year, car_month),  # Возрастная категория
+        "age": age
+        if age
+        else calculate_age(car_year, car_month),  # Возрастная категория
         "engine": engine_type,  # Тип двигателя
         "power": int(horse_power),  # Мощность в л.с.
         "power_unit": 1,  # Тип мощности (1 - л.с.)
@@ -171,8 +183,10 @@ def get_customs_fees_russia(
 
             if response.status_code == 429:
                 # Exponential backoff для 429 ошибок
-                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                print(f"Получен 429 ответ от calcus.ru, ожидание {delay:.2f} секунд... (попытка {attempt + 1}/{max_retries})")
+                delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                print(
+                    f"Получен 429 ответ от calcus.ru, ожидание {delay:.2f} секунд... (попытка {attempt + 1}/{max_retries})"
+                )
                 time.sleep(delay)
                 continue
 
@@ -180,7 +194,11 @@ def get_customs_fees_russia(
             result = response.json()
 
             # Проверяем что ответ содержит необходимые поля
-            if result and isinstance(result, dict) and all(key in result for key in ["sbor", "tax", "util"]):
+            if (
+                result
+                and isinstance(result, dict)
+                and all(key in result for key in ["sbor", "tax", "util"])
+            ):
                 print(f"Успешный запрос к calcus.ru (попытка {attempt + 1})")
                 return result
             else:
@@ -195,9 +213,11 @@ def get_customs_fees_russia(
                 time.sleep(base_delay * (attempt + 1))
                 continue
         except requests.RequestException as e:
-            print(f"Ошибка при запросе к calcus.ru (попытка {attempt + 1}/{max_retries}): {e}")
+            print(
+                f"Ошибка при запросе к calcus.ru (попытка {attempt + 1}/{max_retries}): {e}"
+            )
             if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
+                delay = base_delay * (2**attempt)
                 time.sleep(delay)
                 continue
 
