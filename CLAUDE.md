@@ -63,8 +63,18 @@ CREATE TABLE car_info (
 2. **NBK (National Bank of Kazakhstan)**: `get_nbk_currency_rates()` - USD/KRW to KZT
 3. **NBKR (National Bank of Kyrgyzstan)**: `get_nbkr_currency_rates()` - USD/KRW to KGS
 4. **USDT Exchanges**:
-   - `get_usdt_to_krw_rate_bithumb()` - USDT to KRW via Bithumb API
-   - `get_usdt_to_rub_rate()` - USDT to RUB via Coinbase API
+   - `get_usdt_to_krw_rate_bithumb()` - USDT to KRW. Reads `trade_price` from
+     Bithumb `/v1/ticker?markets=KRW-USDT`, falling back to Upbit's identical
+     endpoint, then subtracts `USDT_KRW_MARGIN` (30 ₩) as the company spread.
+     Raises `RateUnavailableError` if no source responds - it never returns an
+     approximate value, because a wrong rate silently distorts every quote.
+   - `get_usdt_to_rub_rate()` - USDT to RUB via Coinbase API, plus 3.5%
+
+**Only Korean domestic exchanges may be used for USDT/KRW.** International
+quotes (Coinbase, Kraken, etc.) price a different market: USDT trades in Korea
+at its own premium/discount, and that spread changes sign - it was +36 ₩ on
+2026-08-03 and -11 ₩ by 2026-08-22. Substituting an international rate is what
+caused the bot to quote 1389 ₩ while Bithumb showed 1375 ₩.
 
 #### External Services
 

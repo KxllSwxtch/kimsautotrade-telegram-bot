@@ -75,40 +75,73 @@ current_country = ""
 car_fuel_type = ""
 
 
+# --- Курс USDT/KRW ---------------------------------------------------------
+# Берём цену с корейского внутреннего рынка (Bithumb, при недоступности — Upbit).
+# Международные котировки (Coinbase и т.п.) здесь неприменимы: в Корее USDT
+# торгуется со своей премией/дисконтом к мировому курсу, и эта разница меняет
+# знак (в августе 2026 премия сменилась дисконтом).
+USDT_KRW_MARGIN = 30  # спред компании: ниже курс — больше USDT платит клиент
+USDT_KRW_MIN = 800  # границы правдоподобия, отсекают заведомо мусорные котировки
+USDT_KRW_MAX = 2500
+
+USDT_KRW_SOURCES = (
+    ("bithumb", "https://api.bithumb.com/v1/ticker?markets=KRW-USDT"),
+    ("upbit", "https://api.upbit.com/v1/ticker?markets=KRW-USDT"),
+)
+
+RATE_UNAVAILABLE_MESSAGE = (
+    "⚠️ Временно недоступен курс USDT. "
+    "Попробуйте, пожалуйста, через несколько минут."
+)
+
+
+class RateUnavailableError(Exception):
+    """Не удалось получить достоверный курс USDT/KRW."""
+
+
+def _fetch_korean_usdt_krw():
+    """Сырая цена USDT/KRW с корейской биржи, без спреда.
+
+    Бросает RateUnavailableError, если ни один источник не ответил.
+    Никогда не возвращает запасное «примерное» значение — неверный курс
+    искажает всю смету, поэтому лучше отменить расчёт, чем показать цифру.
+    """
+    for attempt in range(3):
+        for name, url in USDT_KRW_SOURCES:
+            try:
+                response = requests.get(url, timeout=5)
+                response.raise_for_status()
+                price = float(response.json()[0]["trade_price"])
+
+                if not USDT_KRW_MIN <= price <= USDT_KRW_MAX:
+                    logging.warning(
+                        f"{name}: неправдоподобный курс USDT/KRW {price}, пропускаем"
+                    )
+                    continue
+
+                logging.info(f"Курс USDT/KRW получен с {name}: {price}")
+                return price
+            except (
+                requests.RequestException,
+                ValueError,
+                KeyError,
+                IndexError,
+                TypeError,
+            ) as e:
+                logging.warning(
+                    f"Не удалось получить курс USDT/KRW с {name} "
+                    f"(попытка {attempt + 1}): {e}"
+                )
+
+        if attempt < 2:
+            time.sleep(2**attempt)
+
+    raise RateUnavailableError("Ни одна корейская биржа не вернула курс USDT/KRW")
+
+
 def get_usdt_to_krw_rate_bithumb():
-    try:
-        # Используем Naver Stock API для получения курса USDT-KRW (Bithumb)
-        url = "https://m.stock.naver.com/front-api/realTime/crypto"
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        }
-        payload = {"fqnfTickers": ["USDT_KRW_BITHUMB"]}
-
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-
-        if response.status_code == 200 and response.text:
-            data = response.json()
-            if data.get("isSuccess") and data.get("result"):
-                bithumb_data = data["result"].get("USDT_KRW_BITHUMB")
-                if bithumb_data and bithumb_data.get("tradePrice"):
-                    # Получаем курс из ответа API и вычитаем 40 пунктов
-                    raw_rate = float(bithumb_data["tradePrice"])
-                    adjusted_rate = raw_rate - 40
-
-                    # Форматируем до целого числа
-                    formatted_rate = round(adjusted_rate)
-
-                    print(f"Курс USDT к KRW (Naver/Bithumb) -> {formatted_rate}")
-                    return formatted_rate
-
-        # Если не удалось получить данные, используем запасной метод
-        print("Не удалось получить курс USDT-KRW, используем запасной метод")
-        return get_usdt_to_krw_rate()
-    except Exception as e:
-        print(f"Ошибка при получении курса USDT-KRW: {e}")
-        return get_usdt_to_krw_rate()
+    """Курс USDT/KRW с учётом спреда компании."""
+    return round(_fetch_korean_usdt_krw() - USDT_KRW_MARGIN)
 
 
 def get_usdt_to_rub_rate():
@@ -138,28 +171,6 @@ def get_usdt_to_rub_rate():
     except Exception as e:
         print(f"Ошибка при получении курса USDT-RUB: {e}")
         return 90.0  # Запасное значение в случае ошибки
-
-
-def get_usdt_to_krw_rate():
-    try:
-        # URL для получения курса USDT к KRW
-        url = "https://api.coinbase.com/v2/exchange-rates?currency=USDT"
-        response = requests.get(url, timeout=10)
-
-        if response.status_code == 200 and response.text:
-            data = response.json()
-            if data and data.get("data") and data["data"].get("rates"):
-                krw_rate = data["data"]["rates"].get("KRW")
-                if krw_rate:
-                    rate = float(krw_rate) + 4
-                    print(f"Курс USDT к KRW -> {rate}")
-                    return rate
-
-        print("Не удалось получить курс USDT-KRW, используем запасное значение")
-        return 1400.0  # Запасное значение
-    except Exception as e:
-        print(f"Ошибка при получении курса USDT-KRW: {e}")
-        return 1400.0  # Запасное значение в случае ошибки
 
 
 def get_usd_to_krw_rate():
@@ -573,7 +584,13 @@ def calculate_cost(country, message):
             engine_volume_formatted = f"{format_number(car_engine_displacement)} cc"
 
             # Получаем курс USDT-KRW
-            usdt_krw_rate = get_usdt_to_krw_rate_bithumb()
+            try:
+                usdt_krw_rate = get_usdt_to_krw_rate_bithumb()
+            except RateUnavailableError as e:
+                logging.error(f"Расчёт отменён — нет курса USDT/KRW: {e}")
+                send_error_message(message, RATE_UNAVAILABLE_MESSAGE)
+                return
+
             # Получаем курс USDT-RUB
             usdt_rub_rate = get_usdt_to_rub_rate()
 
@@ -630,7 +647,12 @@ def calculate_cost(country, message):
             print_message("Выполняется расчёт стоимости для Казахстана")
 
             # Получаем курс USDT-KRW
-            usdt_krw_rate = get_usdt_to_krw_rate_bithumb()
+            try:
+                usdt_krw_rate = get_usdt_to_krw_rate_bithumb()
+            except RateUnavailableError as e:
+                logging.error(f"Расчёт отменён — нет курса USDT/KRW: {e}")
+                send_error_message(message, RATE_UNAVAILABLE_MESSAGE)
+                return
 
             usd_rate_krw = get_usd_to_krw_rate()
 
@@ -780,9 +802,6 @@ def calculate_cost(country, message):
 
         elif current_country == "Kyrgyzstan":
             print_message("Выполняется расчёт стоимости для Кыргызстана")
-
-            # Получаем курс USDT-KRW
-            usdt_krw_rate = get_usdt_to_krw_rate_bithumb()
 
             # Конвертируем цену в KGS
             car_price_krw = int(car_price) * 10000
@@ -1066,7 +1085,13 @@ def complete_manual_russia_calculation(chat_id, manual_data):
     age_formatted = age_display.get(age, age)
 
     # Получаем курсы
-    usdt_krw = get_usdt_to_krw_rate_bithumb()
+    try:
+        usdt_krw = get_usdt_to_krw_rate_bithumb()
+    except RateUnavailableError as e:
+        logging.error(f"Расчёт отменён — нет курса USDT/KRW: {e}")
+        bot.send_message(chat_id, RATE_UNAVAILABLE_MESSAGE)
+        return
+
     usdt_rub = get_usdt_to_rub_rate()
 
     # Запрашиваем таможенные платежи с calcus.ru
