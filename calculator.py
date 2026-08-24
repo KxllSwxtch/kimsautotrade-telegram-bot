@@ -1005,7 +1005,7 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     total_korea_costs_usdt = total_korea_costs / usdt_krw_rate
     total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
 
-    total_russia_costs = customs_duty + recycling_fee + customs_fee + 90000
+    total_russia_costs = customs_duty + recycling_fee + customs_fee + 80000
     total_russia_costs_usdt = total_russia_costs / usdt_rub_rate
 
     total_cost = total_korea_costs_rub + total_russia_costs
@@ -1033,7 +1033,7 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
         f"<b>Расходы по России:</b>\n"
         f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
         f"{util_label}: {format_number(recycling_fee)} ₽\n"
-        f"Услуги Брокера: 90,000 ₽\n"
+        f"Услуги Брокера: 80,000 ₽\n"
         f"Итого: {format_number(total_russia_costs)} ₽\n\n"
         f"<b>Итого стоимость автомобиля под ключ до Владивостока (USDT): (курс: 1 USDT = {format_number(usdt_rub_rate)} ₽)</b>\n"
         f"${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"
@@ -1131,7 +1131,7 @@ def complete_manual_russia_calculation(chat_id, manual_data):
     total_korea_costs_usdt = total_korea_costs / usdt_krw
     total_korea_costs_rub = total_korea_costs_usdt * usdt_rub
 
-    total_russia_costs = customs_duty + recycling_fee + customs_fee + 90000
+    total_russia_costs = customs_duty + recycling_fee + customs_fee + 80000
     total_russia_costs_usdt = total_russia_costs / usdt_rub
 
     total_cost_usdt = total_korea_costs_usdt + total_russia_costs_usdt
@@ -1149,7 +1149,7 @@ def complete_manual_russia_calculation(chat_id, manual_data):
         f"<b>Расходы по России:</b>\n"
         f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
         f"{util_label}: {format_number(recycling_fee)} ₽\n"
-        f"Услуги Брокера: 90,000 ₽\n"
+        f"Услуги Брокера: 80,000 ₽\n"
         f"Итого: {format_number(total_russia_costs)} ₽\n\n"
         f"<b>Итого стоимость автомобиля под ключ (USDT): (курс: 1 USDT = {format_number(usdt_rub)} ₽)</b>\n"
         f"${format_number(total_cost_usdt)} | {format_number(total_cost_usdt_rub)} ₽\n\n"
