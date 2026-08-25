@@ -20,7 +20,10 @@ kimsautotrade-telegram-bot/
 ├── main.py                    # Main bot entry point and message handlers
 ├── calculator.py              # Core calculation logic and country-specific handlers
 ├── config.py                  # Bot configuration and token setup
-├── utils.py                   # Utility functions, formatting, customs calculations
+├── utils.py                   # Utility functions, formatting, Encar spec lookup
+├── customs_ru.py             # Russia customs calculation (duty, fee, excise, VAT)
+├── util_table_ru.py          # Russia recycling-fee (утильсбор) rate tables
+├── test_customs_ru.py        # Offline checks for the Russia customs math
 ├── get_car_info.py           # Web scraping functions for car data extraction
 ├── get_insurance_total.py    # Insurance calculation utilities
 ├── kgs_customs_table.py      # Kyrgyzstan customs fee lookup tables
@@ -76,9 +79,56 @@ at its own premium/discount, and that spread changes sign - it was +36 ₩ on
 2026-08-03 and -11 ₩ by 2026-08-22. Substituting an international rate is what
 caused the bot to quote 1389 ₩ while Bithumb showed 1375 ₩.
 
+#### Encar Specification API (horsepower)
+
+`get_car_power_from_encar()` in `utils.py` reads max power from Encar's own
+catalogue:
+
+```
+https://m.encar.com/mocha/rel.do?method=modelSpecificationByJson
+    &mnfccd={category.manufacturerCd}&mdlcd={category.modelCd}
+    &year={category.formYear}&clshdcd={category.gradeCd}
+```
+
+All four codes come from the `category` block of the vehicle response
+`get_car_info()` already fetches, so no extra lookup is needed to find them.
+Horsepower is `mxPwrPs.value`.
+
+Two traps:
+
+- **The response is cp949 (EUC-KR), not UTF-8.** Set `response.encoding = "cp949"`
+  before `.json()` or it raises `UnicodeDecodeError` on the Korean field text.
+- Unknown trims return `{"mxPwrPs": {"value": "-"}}`, not an HTTP error. Anything
+  non-numeric or outside 20-2000 hp is treated as unknown.
+
+When horsepower is unknown the bot asks the user for it (`pending_calculations`
+in `calculator.py`, handled by `handle_hp_input` in `main.py`). It must never
+guess: horsepower decides whether the recycling fee is the preferential 3 400 ₽
+or a commercial rate in the millions.
+
+#### Russian customs - calculated locally, no external calculator
+
+`customs_ru.calculate_customs_ru()` computes сбор / пошлина / акциз / НДС and
+delegates the recycling fee to `util_table_ru.get_util_fee_ru()`. There is no
+network call: calcus.ru rate-limits aggressively (429) and pan-auto.ru was a
+second point of failure - both were removed on 2026-08-26.
+
+**All rate tables are dated.** Review them when ЕЭК 107, ПП РФ 1638, the excise
+scale, or the recycling-fee coefficients change. Sources are cited in the module
+docstrings; run `python test_customs_ru.py` after any edit.
+
+Who pays what (physical person, personal use):
+
+- ICE / hybrid: сбор + пошлина + утильсбор. **No excise, no VAT.**
+- Electric: совокупный таможенный платёж - сбор + 15% пошлина + акциз + НДС 22%
+  + утильсбор. Owner category makes no difference for EVs.
+
+The recycling fee has only **two** age brackets in law - up to 3 years and over
+3 years - not four. The `3-5` column of `utils-2026.xlsx` is the rate for every
+car older than three years.
+
 #### External Services
 
-- **calcus.ru**: Russian customs fee calculations via POST API
 - **Selenium WebDriver**: Car data scraping from Korean websites
 - **encar.com**: Primary car listing source
 - **kimsautotrade.com**: Secondary car listing source
@@ -171,12 +221,21 @@ def handle_callback_query(call):
 
 ### 4. Utilities (`utils.py`)
 
-- **Rate Limiting**: API request throttling for calcus.ru
 - **Number Formatting**: Locale-aware thousand separators
-- **Customs Calculations**: Russia-specific customs fee API integration
+- **Encar Spec Lookup**: `get_car_power_from_encar()` - horsepower from the catalogue
 - **Age Calculation**: Car age determination for tax brackets
 
-### 5. Country-Specific Data (`kgs_customs_table.py`)
+### 5. Russian Customs (`customs_ru.py`, `util_table_ru.py`)
+
+- **`calculate_customs_ru()`**: single entry point, returns
+  `{sbor, tax, util, excise, vat, value_rub, value_eur, util_preferential}` in rubles
+- **Rate Tables**: customs fee brackets, unified duty rates by age and volume,
+  excise scale, VAT rate - all module-level constants with their legal source cited
+- **`get_util_fee_ru()`**: recycling fee by engine type, volume, power and age
+- **Fail Loud**: raises `ValueError` rather than quoting a zero when inputs or
+  CBR rates are missing - a silently wrong customs figure is worse than no quote
+
+### 6. Country-Specific Data (`kgs_customs_table.py`)
 
 - **Kyrgyzstan Customs**: Static fee tables by year and engine volume
 - **Tax Brackets**: Different rates based on car age and specifications
@@ -287,7 +346,6 @@ DATABASE_URL=postgresql://user:pass@host:port/db
 
 - **WebDriver Failures**: Check ChromeDriver version compatibility
 - **Database Errors**: Verify PostgreSQL connection and SSL requirements
-- **API Rate Limits**: Monitor calcus.ru request frequency
 - **Currency API Failures**: Implement fallback rate sources
 
 ### Logging Patterns

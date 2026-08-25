@@ -25,12 +25,10 @@ from utils import (
     print_message,
     calculate_age,
     calculate_customs_fee_kg,
-    get_customs_fees_russia,
-    get_car_data_from_panauto,
+    get_car_power_from_encar,
     map_fuel_type_to_engine_code,
-    clean_number,
 )
-from util_table_ru import get_util_fee_ru
+from customs_ru import calculate_customs_ru
 
 
 load_dotenv()
@@ -95,8 +93,14 @@ RATE_UNAVAILABLE_MESSAGE = (
 )
 
 
+CBR_UNAVAILABLE_MESSAGE = (
+    "⚠️ Временно недоступен курс ЦБ РФ, без него нельзя посчитать таможню. "
+    "Попробуйте, пожалуйста, через несколько минут."
+)
+
+
 class RateUnavailableError(Exception):
-    """Не удалось получить достоверный курс USDT/KRW."""
+    """Не удалось получить достоверный курс валют."""
 
 
 def _fetch_korean_usdt_krw():
@@ -386,6 +390,25 @@ def get_currency_rates():
         return "Ошибка: Не удалось подключиться к серверу."
 
 
+def ensure_cbr_rates():
+    """
+    Гарантирует, что курсы ЦБ (KRW и EUR) загружены.
+
+    Таможня считается локально и полностью зависит от этих курсов: нулевой курс
+    дал бы нулевую пошлину, поэтому лучше отменить расчёт, чем показать цифру.
+    Курсы обновляются фоновым потоком при старте (main.py), здесь — повторная
+    попытка, если тот запрос не прошёл.
+    """
+    global krw_rub_rate, eur_rub_rate
+
+    if not krw_rub_rate or not eur_rub_rate:
+        logging.warning("Курсы ЦБ не загружены, повторный запрос")
+        get_currency_rates()
+
+    if not krw_rub_rate or not eur_rub_rate:
+        raise RateUnavailableError("ЦБ РФ не вернул курсы KRW/EUR")
+
+
 def send_error_message(message, error_text):
     global last_error_message_id
 
@@ -442,6 +465,16 @@ def get_car_info(url):
     car_type = response["spec"]["bodyName"]
     fuel_type = response["spec"].get("fuelName", "가솔린")  # Default to gasoline
 
+    # Коды каталога Encar — по ним получаем мощность (см. get_car_power_from_encar).
+    # Запрос делаем только там, где мощность нужна (Россия), поэтому здесь их
+    # просто прокидываем наверх.
+    spec_codes = {
+        "manufacturer_cd": response["category"].get("manufacturerCd"),
+        "model_cd": response["category"].get("modelCd"),
+        "form_year": response["category"].get("formYear"),
+        "grade_cd": response["category"].get("gradeCd"),
+    }
+
     # Для получения данных по страховым выплатам
     vehicle_no = response["vehicleNo"]
     vehicle_id = response["vehicleId"]
@@ -482,7 +515,14 @@ def get_car_info(url):
         cursor.close()
         conn.close()
 
-    return [formatted_car_date, car_price, car_engine_displacement, formatted_car_type, fuel_type]
+    return [
+        formatted_car_date,
+        car_price,
+        car_engine_displacement,
+        formatted_car_type,
+        fuel_type,
+        spec_codes,
+    ]
 
 
 def calculate_cost(country, message):
@@ -534,7 +574,7 @@ def calculate_cost(country, message):
         car_id = query_params.get("carid", [None])[0]
 
     result = get_car_info(link)
-    car_date, car_price, car_engine_displacement, car_type, fuel_type = result
+    car_date, car_price, car_engine_displacement, car_type, fuel_type, spec_codes = result
 
     # Обработка ошибки получения данных
     if not car_date or not car_price or not car_engine_displacement:
@@ -583,6 +623,14 @@ def calculate_cost(country, message):
 
             engine_volume_formatted = f"{format_number(car_engine_displacement)} cc"
 
+            # Курсы ЦБ нужны для локального расчёта таможни — без них не считаем.
+            try:
+                ensure_cbr_rates()
+            except RateUnavailableError as e:
+                logging.error(f"Расчёт отменён — нет курсов ЦБ: {e}")
+                send_error_message(message, CBR_UNAVAILABLE_MESSAGE)
+                return
+
             # Получаем курс USDT-KRW
             try:
                 usdt_krw_rate = get_usdt_to_krw_rate_bithumb()
@@ -598,17 +646,8 @@ def calculate_cost(country, message):
             price_krw = int(car_price) * 10000
             car_price_rub = price_krw * krw_rub_rate
 
-            # Источник истины по таможне — calcus.ru. pan-auto.ru используем ТОЛЬКО
-            # как подсказку по мощности (hp) и как резервный источник пошлины, если
-            # calcus.ru недоступен. Его предрассчитанный утиль НЕ используем: он не
-            # учитывает мощность (>160 л.с. → коммерческий утиль) и занижает сумму.
-            panauto_data = get_car_data_from_panauto(car_id_external)
-
-            hp = panauto_data.get("hp") if panauto_data else None
-            try:
-                hp = int(float(hp)) if hp not in (None, "", "0", 0) else None
-            except (TypeError, ValueError):
-                hp = None
+            # Мощность берём из каталога характеристик Encar по кодам модели.
+            hp = get_car_power_from_encar(**spec_codes)
 
             pending_data = {
                 "car_data": result,
@@ -625,15 +664,14 @@ def calculate_cost(country, message):
                 "usdt_krw_rate": usdt_krw_rate,
                 "usdt_rub_rate": usdt_rub_rate,
                 "car_id": car_id_external,
-                "panauto_customs": (panauto_data or {}).get("customs"),
             }
 
             # Мощность обязательна для корректного утильсбора (>160 л.с. — коммерческий).
             if hp:
-                print_message(f"Мощность получена с pan-auto.ru: {hp} л.с.")
+                print_message(f"Мощность получена из каталога Encar: {hp} л.с.")
                 complete_russia_calculation_with_hp(message.chat.id, pending_data, hp)
             else:
-                print_message("Мощность неизвестна (pan-auto.ru hp=null) — запрашиваем у пользователя")
+                print_message("Мощность не найдена в каталоге Encar — запрашиваем у пользователя")
                 pending_calculations[message.chat.id] = pending_data
                 bot.send_message(
                     message.chat.id,
@@ -920,6 +958,29 @@ def calculate_cost(country, message):
             bot.delete_message(message.chat.id, processing_message.message_id)
 
 
+def format_customs_extra_lines(customs):
+    """
+    Строки акциза и НДС для сообщения о расчёте.
+
+    У ДВС и гибридов физлицо их не платит (обе величины = 0), поэтому строки не
+    выводятся и вид сообщения не меняется. Для электромобилей это часть
+    совокупного таможенного платежа и скрывать её нельзя.
+    """
+    lines = ""
+    if customs["excise"]:
+        lines += f"Акциз: {format_number(customs['excise'])} ₽\n"
+    if customs["vat"]:
+        lines += f"НДС (22%): {format_number(customs['vat'])} ₽\n"
+    return lines
+
+
+def format_engine_volume_line(engine_code, engine_volume_formatted):
+    """У электромобилей encar отдаёт бессмысленный «объём» — строку не выводим."""
+    if engine_code == 4:
+        return ""
+    return f"Объём двигателя: {engine_volume_formatted}\n"
+
+
 def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     """
     Завершает расчёт стоимости для России когда пользователь ввёл HP вручную.
@@ -931,7 +992,14 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     global car_data, car_id_external
 
     # Извлекаем сохранённые данные
-    car_date, car_price, car_engine_displacement, car_type, fuel_type = pending_data["car_data"]
+    (
+        car_date,
+        car_price,
+        car_engine_displacement,
+        car_type,
+        fuel_type,
+        _spec_codes,
+    ) = pending_data["car_data"]
     year = pending_data["year"]
     month = pending_data["month"]
     price_krw = pending_data["price_krw"]
@@ -942,7 +1010,6 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     usdt_krw_rate = pending_data["usdt_krw_rate"]
     usdt_rub_rate = pending_data["usdt_rub_rate"]
     car_id = pending_data["car_id"]
-    panauto_customs = pending_data.get("panauto_customs")
 
     # Обновляем глобальную переменную car_id_external
     car_id_external = car_id
@@ -950,51 +1017,43 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     # Получаем код типа двигателя из названия топлива
     engine_code = map_fuel_type_to_engine_code(fuel_type)
 
-    print_message(f"Расчёт таможни через calcus.ru: HP={hp}, engine_type={engine_code}, fuel={fuel_type}")
+    print_message(f"Расчёт таможни: HP={hp}, engine_type={engine_code}, fuel={fuel_type}")
 
-    # Вызываем calcus.ru с указанным HP — основной источник истины по таможне
-    response = get_customs_fees_russia(
-        car_engine_displacement,
-        price_krw,
-        year,
-        month,
-        engine_type=engine_code,
-        horse_power=hp,
-    )
+    try:
+        ensure_cbr_rates()
+        customs = calculate_customs_ru(
+            car_engine_displacement,
+            price_krw,
+            age,
+            engine_code,
+            hp,
+            krw_rub_rate,
+            eur_rub_rate,
+        )
+    except RateUnavailableError as e:
+        logging.error(f"Расчёт отменён — нет курсов ЦБ: {e}")
+        bot.send_message(chat_id, CBR_UNAVAILABLE_MESSAGE)
+        return
+    except ValueError as e:
+        logging.error(f"Не удалось посчитать таможню: {e}")
+        bot.send_message(
+            chat_id,
+            "❌ Не удалось рассчитать таможенные платежи по этому автомобилю.\n\n"
+            "Для получения расчета напишите менеджеру: +82-10-8029-6232",
+        )
+        return
 
-    approx_note = ""
-    if response is not None:
-        # Таможенный сбор
-        customs_fee = clean_number(response["sbor"])
-        # Таможенная пошлина
-        customs_duty = clean_number(response["tax"])
-        # Утилизационный сбор (calcus.ru уже учитывает мощность и год)
-        recycling_fee = clean_number(response["util"])
-    else:
-        # calcus.ru недоступен — резерв: пошлина с pan-auto.ru + утиль из локальной таблицы 2026.
-        # Никогда не показываем заниженный (льготный) утиль вслепую: если резерв не покрывает
-        # случай (объём > 3.0 л, возраст 5-7/7+ и т.п.) — честно сообщаем о недоступности.
-        fallback_util = get_util_fee_ru(car_engine_displacement, hp, age, engine_code)
-        if panauto_customs and fallback_util is not None:
-            print_message(
-                f"calcus.ru недоступен. Резервный расчёт: утиль из таблицы 2026 = {fallback_util}"
-            )
-            customs_fee = int(panauto_customs.get("sbor", 0) or 0)
-            customs_duty = int(panauto_customs.get("tax", 0) or 0)
-            recycling_fee = int(fallback_util)
-            approx_note = "⚠️ Приблизительный расчёт (сервис calcus.ru временно недоступен)\n\n"
-        else:
-            bot.send_message(
-                chat_id,
-                "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
-                "Попробуйте повторить запрос через несколько минут.\n\n"
-                "Для получения расчета напишите менеджеру: +82-10-8029-6232",
-            )
-            return
+    customs_fee = customs["sbor"]  # Таможенный сбор
+    customs_duty = customs["tax"]  # Таможенная пошлина
+    recycling_fee = customs["util"]  # Утилизационный сбор
+    customs_excise = customs["excise"]  # Акциз (только электромобили)
+    customs_vat = customs["vat"]  # НДС (только электромобили)
 
-    # Тип утильсбора: льготный (физлицо, ≤160 л.с., ≤3.0 л) или коммерческий (>160 л.с.)
+    # Тип утильсбора: льготный (физлицо, ≤160 л.с., ≤3.0 л) или коммерческий
     util_label = (
-        "Утильсбор (льготный)" if recycling_fee <= 5200 else "Утильсбор (коммерческий)"
+        "Утильсбор (льготный)"
+        if customs["util_preferential"]
+        else "Утильсбор (коммерческий)"
     )
 
     excise = 2040000
@@ -1005,7 +1064,14 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
     total_korea_costs_usdt = total_korea_costs / usdt_krw_rate
     total_korea_costs_rub = total_korea_costs_usdt * usdt_rub_rate
 
-    total_russia_costs = customs_duty + recycling_fee + customs_fee + 80000
+    total_russia_costs = (
+        customs_duty
+        + recycling_fee
+        + customs_fee
+        + customs_excise
+        + customs_vat
+        + 80000
+    )
     total_russia_costs_usdt = total_russia_costs / usdt_rub_rate
 
     total_cost = total_korea_costs_rub + total_russia_costs
@@ -1022,9 +1088,8 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
 
     # Формирование сообщения результата
     result_message = (
-        f"{approx_note}"
         f"Возраст: {age_formatted}\n"
-        f"Объём двигателя: {engine_volume_formatted}\n"
+        f"{format_engine_volume_line(engine_code, engine_volume_formatted)}"
         f"Мощность: {hp} л.с.\n\n"
         f"<b>Корея:</b>\n"
         f"Стоимость автомобиля: {format_number(price_krw)} ₩\n"
@@ -1032,6 +1097,7 @@ def complete_russia_calculation_with_hp(chat_id, pending_data, hp):
         f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT (курс: 1 USDT = {format_number(usdt_krw_rate)} ₩) | {format_number(total_korea_costs_rub)} ₽\n\n"
         f"<b>Расходы по России:</b>\n"
         f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
+        f"{format_customs_extra_lines(customs)}"
         f"{util_label}: {format_number(recycling_fee)} ₽\n"
         f"Услуги Брокера: 80,000 ₽\n"
         f"Итого: {format_number(total_russia_costs)} ₽\n\n"
@@ -1094,33 +1160,44 @@ def complete_manual_russia_calculation(chat_id, manual_data):
 
     usdt_rub = get_usdt_to_rub_rate()
 
-    # Запрашиваем таможенные платежи с calcus.ru
-    response = get_customs_fees_russia(
-        displacement,
-        price_krw,
-        car_year=0,
-        car_month=0,
-        engine_type=fuel_type,
-        horse_power=hp,
-        age=age,
-    )
+    # В ручном расчёте fuel_type — уже код двигателя (кнопки manual_fuel:1..6)
+    engine_code = fuel_type
 
-    if response is None:
+    try:
+        ensure_cbr_rates()
+        customs = calculate_customs_ru(
+            displacement,
+            price_krw,
+            age,
+            engine_code,
+            hp,
+            krw_rub_rate,
+            eur_rub_rate,
+        )
+    except RateUnavailableError as e:
+        logging.error(f"Расчёт отменён — нет курсов ЦБ: {e}")
+        bot.send_message(chat_id, CBR_UNAVAILABLE_MESSAGE)
+        return
+    except ValueError as e:
+        logging.error(f"Не удалось посчитать таможню: {e}")
         bot.send_message(
             chat_id,
-            "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
-            "Попробуйте повторить запрос через несколько минут.\n\n"
+            "❌ Не удалось рассчитать таможенные платежи по этим параметрам.\n\n"
             "Для получения расчета напишите менеджеру: +82-10-8029-6232",
         )
         return
 
-    customs_fee = clean_number(response["sbor"])
-    customs_duty = clean_number(response["tax"])
-    recycling_fee = clean_number(response["util"])
+    customs_fee = customs["sbor"]
+    customs_duty = customs["tax"]
+    recycling_fee = customs["util"]
+    customs_excise = customs["excise"]
+    customs_vat = customs["vat"]
 
-    # Тип утильсбора: льготный (физлицо, ≤160 л.с., ≤3.0 л) или коммерческий (>160 л.с.)
+    # Тип утильсбора: льготный (физлицо, ≤160 л.с., ≤3.0 л) или коммерческий
     util_label = (
-        "Утильсбор (льготный)" if recycling_fee <= 5200 else "Утильсбор (коммерческий)"
+        "Утильсбор (льготный)"
+        if customs["util_preferential"]
+        else "Утильсбор (коммерческий)"
     )
 
     excise = 2040000
@@ -1131,7 +1208,14 @@ def complete_manual_russia_calculation(chat_id, manual_data):
     total_korea_costs_usdt = total_korea_costs / usdt_krw
     total_korea_costs_rub = total_korea_costs_usdt * usdt_rub
 
-    total_russia_costs = customs_duty + recycling_fee + customs_fee + 80000
+    total_russia_costs = (
+        customs_duty
+        + recycling_fee
+        + customs_fee
+        + customs_excise
+        + customs_vat
+        + 80000
+    )
     total_russia_costs_usdt = total_russia_costs / usdt_rub
 
     total_cost_usdt = total_korea_costs_usdt + total_russia_costs_usdt
@@ -1140,7 +1224,7 @@ def complete_manual_russia_calculation(chat_id, manual_data):
     # Формирование сообщения результата
     result_message = (
         f"Возраст: {age_formatted}\n"
-        f"Объём двигателя: {format_number(displacement)} cc\n"
+        f"{format_engine_volume_line(engine_code, f'{format_number(displacement)} cc')}"
         f"Мощность: {hp} л.с.\n\n"
         f"<b>Корея:</b>\n"
         f"Стоимость автомобиля: {format_number(price_krw)} ₩\n"
@@ -1148,6 +1232,7 @@ def complete_manual_russia_calculation(chat_id, manual_data):
         f"Итого: {format_number(total_korea_costs)} ₩ | ${format_number(total_korea_costs_usdt)} USDT | {format_number(total_korea_costs_rub)} ₽\n\n"
         f"<b>Расходы по России:</b>\n"
         f"Таможенные платежи: {format_number(customs_duty + customs_fee)} ₽\n"
+        f"{format_customs_extra_lines(customs)}"
         f"{util_label}: {format_number(recycling_fee)} ₽\n"
         f"Услуги Брокера: 80,000 ₽\n"
         f"Итого: {format_number(total_russia_costs)} ₽\n\n"
@@ -1451,23 +1536,22 @@ def calculate_cost_manual(country, year, month, engine_volume, price, car_type, 
         # Определяем код типа двигателя
         engine_code = map_fuel_type_to_engine_code(fuel_type) if fuel_type else 1
 
-        response = get_customs_fees_russia(
-            engine_volume, price_krw, year, month, engine_type=engine_code, horse_power=hp
+        ensure_cbr_rates()
+        customs = calculate_customs_ru(
+            engine_volume,
+            price_krw,
+            calculate_age(year, month),
+            engine_code,
+            hp,
+            krw_rub_rate,
+            eur_rub_rate,
         )
 
-        # Проверяем что API вернул валидный ответ
-        if response is None:
-            bot.send_message(
-                chat_id,
-                "❌ Извините, временно недоступен сервис расчета таможенных платежей. "
-                "Попробуйте повторить запрос через несколько минут.\n\n"
-                "Для получения расчета напишите менеджеру: +82-10-8029-6232",
-            )
-            return
-
-        customs_duty = clean_number(response["tax"])
-        customs_fee = clean_number(response["sbor"])
-        recycling_fee = clean_number(response["util"])
+        customs_duty = customs["tax"]
+        customs_fee = customs["sbor"]
+        recycling_fee = customs["util"]
+        customs_excise = customs["excise"]
+        customs_vat = customs["vat"]
 
         # Рассчитываем акциз
         excise = (
@@ -1482,7 +1566,13 @@ def calculate_cost_manual(country, year, month, engine_volume, price, car_type, 
 
         # Расходы в России
         total_russia_costs = (
-            customs_duty + recycling_fee + customs_fee + 100000 + 250000
+            customs_duty
+            + recycling_fee
+            + customs_fee
+            + customs_excise
+            + customs_vat
+            + 100000
+            + 250000
         )
         total_russia_costs_usdt = total_russia_costs / usdt_rub_rate
 

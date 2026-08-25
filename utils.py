@@ -1,38 +1,43 @@
 import datetime
 import gc
 import locale
-import random
-import threading
-import time
 
 import requests
 
 from kgs_customs_table import KGS_CUSTOMS_TABLE
 
-HTTP_PROXY = "http://B01vby:GBno0x@45.118.250.2:8000"
-proxies = {"http": HTTP_PROXY, "https": HTTP_PROXY}
+# Каталог характеристик Encar. Отдаёт мощность (mxPwrPs) по кодам модели из
+# карточки автомобиля. ВНИМАНИЕ: ответ в кодировке cp949 (EUC-KR), не UTF-8.
+ENCAR_SPEC_URL = "https://m.encar.com/mocha/rel.do?method=modelSpecificationByJson"
+
+# Правдоподобный диапазон мощности легкового авто. Всё, что вне — считаем мусором
+# и просим пользователя ввести мощность вручную: заниженная мощность даёт льготный
+# утильсбор вместо коммерческого и занижает смету в разы.
+_MIN_PLAUSIBLE_HP = 20
+_MAX_PLAUSIBLE_HP = 2000
 
 
 def map_fuel_type_to_engine_code(fuel_type):
     """
-    Maps fuel type to calcus.ru engine code.
-    Supports Korean (from encar API) and Russian (from pan-auto.ru) fuel names.
+    Преобразует название типа топлива в код двигателя.
 
-    Engine codes:
-    1 - Gasoline
-    2 - Diesel
-    4 - Electric
-    5 - Sequential Hybrid (Последовательный гибрид)
-    6 - Parallel Hybrid (Параллельный гибрид)
+    Коды двигателя:
+    1 - бензин
+    2 - дизель
+    4 - электро
+    5 - последовательный гибрид
+    6 - параллельный гибрид
     """
     fuel_mapping = {
-        # Korean fuel names (from encar.com API spec.fuelName)
-        "가솔린": 1,  # Gasoline
-        "디젤": 2,  # Diesel
-        "전기": 4,  # Electric
-        "하이브리드": 6,  # Hybrid (default to parallel)
-        "LPG": 1,  # Treat LPG as gasoline
-        # Russian fuel names (from pan-auto.ru API)
+        # Корейские названия (encar.com API, spec.fuelName)
+        "가솔린": 1,  # бензин
+        "디젤": 2,  # дизель
+        "전기": 4,  # электро
+        "하이브리드": 6,  # гибрид (по умолчанию параллельный)
+        "가솔린+전기": 6,  # бензин + электро (так encar называет гибрид)
+        "디젤+전기": 6,  # дизель + электро
+        "LPG": 1,  # LPG считаем бензином
+        # Русские названия (ручной расчёт)
         "Бензин": 1,
         "Дизель": 2,
         "Электро": 4,
@@ -41,188 +46,66 @@ def map_fuel_type_to_engine_code(fuel_type):
         "Последовательный гибрид": 5,
         "Параллельный гибрид": 6,
     }
-    return fuel_mapping.get(fuel_type, 1)  # Default to gasoline
+    return fuel_mapping.get(fuel_type, 1)  # По умолчанию бензин
 
 
-def get_car_data_from_panauto(car_id):
+def get_car_power_from_encar(manufacturer_cd, model_cd, form_year, grade_cd):
     """
-    Fetches car data from pan-auto.ru API.
-    Returns dict with hp, fuel_type, and pre-calculated customs values if found.
-    Returns None if car not found or API error.
+    Мощность двигателя (л.с.) из каталога характеристик Encar.
+
+    Коды берутся из блока `category` карточки автомобиля (api.encar.com):
+    manufacturerCd, modelCd, formYear, gradeCd.
+
+    :return: мощность в л.с. (int) или None, если данных нет — тогда мощность
+             нужно запросить у пользователя.
     """
-    url = f"https://zefir.pan-auto.ru/api/korea/{car_id}/"
+    if not all([manufacturer_cd, model_cd, form_year, grade_cd]):
+        print("Encar: не хватает кодов модели для запроса мощности")
+        return None
+
+    url = (
+        f"{ENCAR_SPEC_URL}"
+        f"&mnfccd={manufacturer_cd}"
+        f"&mdlcd={model_cd}"
+        f"&year={form_year}"
+        f"&clshdcd={grade_cd}"
+    )
 
     headers = {
-        "Accept": "*/*",
-        "Accept-Language": "en,ru;q=0.9",
-        "Connection": "keep-alive",
-        "Origin": "https://pan-auto.ru",
-        "Referer": "https://pan-auto.ru/",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Referer": "https://m.encar.com/",
     }
 
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 404:
-            print(f"Car {car_id} not found on pan-auto.ru")
-            return None
         response.raise_for_status()
+
+        # Ответ приходит в cp949 (EUC-KR); без явной кодировки .json() падает
+        # на корейских названиях полей.
+        response.encoding = "cp949"
         data = response.json()
 
-        # Extract customs values from RUB costs
-        rub_costs = data.get("costs", {}).get("RUB", {})
+        # Для неизвестных комплектаций Encar отдаёт value = "-", а не ошибку.
+        raw_power = (data.get("mxPwrPs") or {}).get("value")
+        power = int(float(raw_power))
 
-        result = {
-            "hp": data.get("hp"),  # Horsepower
-            "fuel_type": data.get("fuelType"),  # Russian fuel name
-            "customs": {
-                "sbor": rub_costs.get("clearanceCost", 0),  # Customs fee (сбор)
-                "tax": rub_costs.get("customsDuty", 0),  # Customs duty (пошлина)
-                "util": rub_costs.get(
-                    "utilizationFee", 0
-                ),  # Utilization fee (утильсбор)
-            },
-        }
+        if not _MIN_PLAUSIBLE_HP <= power <= _MAX_PLAUSIBLE_HP:
+            print(f"Encar: неправдоподобная мощность {power} л.с., игнорируем")
+            return None
 
-        print(
-            f"Pan-auto.ru data for car {car_id}: HP={result['hp']}, fuel={result['fuel_type']}"
-        )
-        return result
+        print(f"Encar: мощность {power} л.с. (коды {manufacturer_cd}/{model_cd}/{form_year}/{grade_cd})")
+        return power
     except requests.RequestException as e:
-        print(f"Error fetching from pan-auto.ru: {e}")
+        print(f"Encar: ошибка запроса характеристик: {e}")
         return None
-    except Exception as e:
-        print(f"Unexpected error fetching from pan-auto.ru: {e}")
+    except (TypeError, ValueError, AttributeError, KeyError) as e:
+        print(f"Encar: мощность не определена в ответе каталога: {e}")
         return None
-
-
-# Enhanced rate limiting для calcus.ru - максимум 4 запроса в секунду для безопасности
-_last_request_time = 0
-_min_request_interval = 0.25  # 1/4 секунды между запросами (4 req/sec)
-_rate_limit_lock = threading.Lock()  # Thread-safe rate limiting
-
-
-def _rate_limit():
-    """Применяет ограничение скорости запросов к calcus.ru с thread-safe механизмом"""
-    global _last_request_time
-
-    with _rate_limit_lock:
-        current_time = time.time()
-        time_since_last_request = current_time - _last_request_time
-
-        if time_since_last_request < _min_request_interval:
-            sleep_time = _min_request_interval - time_since_last_request
-            time.sleep(sleep_time)
-
-        _last_request_time = time.time()
 
 
 # Очищение памяти
 def clear_memory():
     gc.collect()
-
-
-def clean_number(value):
-    """Очищает строку от пробелов и преобразует в число"""
-    return int(float(value.replace(" ", "").replace(",", ".")))
-
-
-def get_customs_fees_russia(
-    engine_volume,
-    car_price,
-    car_year,
-    car_month,
-    engine_type=1,
-    horse_power=None,
-    age=None,
-):
-    """
-    Запрашивает расчёт таможенных платежей с сайта calcus.ru с retry логикой.
-    :param engine_volume: Объём двигателя (куб. см)
-    :param car_price: Цена авто в вонах
-    :param car_year: Год выпуска авто
-    :param car_month: Месяц выпуска авто
-    :param engine_type: Тип двигателя (1 - бензин, 2 - дизель, 4 - электро, 5 - послед. гибрид, 6 - парал. гибрид)
-    :param horse_power: Мощность двигателя в л.с. (обязательно с декабря 2025)
-    :param age: Возрастная категория напрямую (если передана, car_year/car_month не используются)
-    :return: JSON с результатами расчёта или None при ошибке
-    """
-    url = "https://calcus.ru/calculate/Customs"
-    max_retries = 4
-    base_delay = 1.0
-
-    # Если мощность не указана, используем расчётную (объём / 15)
-    if horse_power is None:
-        horse_power = calculate_horse_power(engine_volume)
-        print(f"HP not provided, using estimated value: {horse_power}")
-
-    payload = {
-        "owner": 1,  # Физлицо
-        "age": age
-        if age
-        else calculate_age(car_year, car_month),  # Возрастная категория
-        "engine": engine_type,  # Тип двигателя
-        "power": int(horse_power),  # Мощность в л.с.
-        "power_unit": 1,  # Тип мощности (1 - л.с.)
-        "value": int(engine_volume),  # Объём двигателя
-        "price": int(car_price),  # Цена авто в KRW
-        "curr": "KRW",  # Валюта
-    }
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Referer": "https://calcus.ru/",
-        "Origin": "https://calcus.ru",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
-    for attempt in range(max_retries):
-        try:
-            _rate_limit()
-            response = requests.post(url, data=payload, headers=headers, timeout=10)
-
-            if response.status_code == 429:
-                # Exponential backoff для 429 ошибок
-                delay = base_delay * (2**attempt) + random.uniform(0, 1)
-                print(
-                    f"Получен 429 ответ от calcus.ru, ожидание {delay:.2f} секунд... (попытка {attempt + 1}/{max_retries})"
-                )
-                time.sleep(delay)
-                continue
-
-            response.raise_for_status()
-            result = response.json()
-
-            # Проверяем что ответ содержит необходимые поля
-            if (
-                result
-                and isinstance(result, dict)
-                and all(key in result for key in ["sbor", "tax", "util"])
-            ):
-                print(f"Успешный запрос к calcus.ru (попытка {attempt + 1})")
-                return result
-            else:
-                print(f"Неполный ответ от calcus.ru: {result}")
-                if attempt < max_retries - 1:
-                    time.sleep(base_delay)
-                    continue
-
-        except requests.Timeout:
-            print(f"Таймаут запроса к calcus.ru (попытка {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(base_delay * (attempt + 1))
-                continue
-        except requests.RequestException as e:
-            print(
-                f"Ошибка при запросе к calcus.ru (попытка {attempt + 1}/{max_retries}): {e}"
-            )
-            if attempt < max_retries - 1:
-                delay = base_delay * (2**attempt)
-                time.sleep(delay)
-                continue
-
-    print("Все попытки запроса к calcus.ru исчерпаны")
-    return None
 
 
 def calculate_customs_fee_kg(engine_volume, car_year):
@@ -253,45 +136,9 @@ def calculate_customs_fee_kg(engine_volume, car_year):
     return year_table[max(year_table.keys())]
 
 
-def calculate_excise_russia(horse_power):
-    """
-    Расчет акциза на автомобиль на основе мощности двигателя в л.с.
-    """
-    if horse_power <= 90:
-        return 0
-    elif horse_power <= 150:
-        return horse_power * 61
-    elif horse_power <= 200:
-        return horse_power * 583
-    elif horse_power <= 300:
-        return horse_power * 955
-    elif horse_power <= 400:
-        return horse_power * 1628
-    elif horse_power <= 500:
-        return horse_power * 1685
-    else:
-        return horse_power * 1740
-
-
-def calculate_horse_power(engine_volume):
-    """
-    Рассчитывает мощность двигателя в лошадиных силах (л.с.).
-    """
-    engine_volume = int(engine_volume)
-    horse_power = round(engine_volume / 15)
-    return horse_power
-
-
-# Функция для расчёта возраста автомобиля для расчёта утильсбора
-def calculate_age_for_utilization_fee(year):
-    current_year = datetime.datetime.now().year
-    age = current_year - int(year)
-    return age
-
-
 def calculate_age(year, month):
     """
-    Рассчитывает возрастную категорию автомобиля по классификации calcus.ru.
+    Рассчитывает возрастную категорию автомобиля.
 
     :param year: Год выпуска автомобиля
     :param month: Месяц выпуска автомобиля
